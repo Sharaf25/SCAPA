@@ -15,7 +15,6 @@ import logging
 import re
 import ipaddress
 import subprocess
-import yara
 import pprint
 import glob
 import pickle
@@ -35,7 +34,7 @@ def readrules():
     for line in ruleslist:
         if line.startswith("alert"):
             rules_list.append(line)
-    print(rules_list)
+    #print(rules_list)
     return rules_list
 
 alertprotocols = []
@@ -97,22 +96,15 @@ def process_rules(rulelist): #function for processing each rule and add each seg
             alertmsgs.append("")
             pass
 
-    print(alertprotocols)
-    print(alertdestips)
-    print(alertsrcips)
-    print(alertsrcports)
-    print(alertdestports)
-    print(alertmsgs)
+    #print(alertprotocols)
+    #print(alertdestips)
+    #print(alertsrcips)
+    #print(alertsrcports)
+    #print(alertdestports)
+    #print(alertmsgs)
 
 process_rules(readrules())
 
-"""
-deviceiplist = []
-for route in scp.read_routes():
-    if str(route[4]) not in deviceiplist:
-        deviceiplist.append(str(route[4]))
-        print(str(route[4]))
-"""
 
 MLresult = []
 pktsummarylist = []
@@ -128,8 +120,6 @@ logdecodedtls = True
 httpobjectindexes = []
 httpobjectactuals = []
 httpobjecttypes = []
-#yaraflagged_filenames = []
-#reqfilepathbase = "./temp/tcpflowdump/"
 updatepktlist = False
 
 
@@ -153,7 +143,7 @@ layout = [[sg.Button('STARTCAP', key="-startcap-"),
            sg.Text("HTTP2 STREAMS", font=('Arial Bold', 14),justification="left", pad = ((205, 0), 0)),
            sg.Text("TCP STREAMS", font=('Arial Bold', 14),justification="left", pad = ((40, 0), 0)),
            sg.Text("HTTP OBJECTS", font=('Arial Bold', 14),justification="left", pad = ((60, 0), 0)),
-           sg.Text("Machine Learning", font=('Arial Bold', 14),justification="left", pad = ((35, 0), 0))
+           sg.Text("ATTACK TYPE", font=('Arial Bold', 14),justification="left", pad = ((35, 0), 0))
            ],
           [sg.Multiline(size=(100,20), key='-payloaddecoded-'),
            sg.Listbox(key='-http2streams-', size=(25, 20), values=http2streams, enable_events=True),
@@ -163,7 +153,7 @@ layout = [[sg.Button('STARTCAP', key="-startcap-"),
            ],
           [sg.Button('Exit')]]
 
-window = sg.Window('RTNIDS', layout, size=(1600,800), resizable=True)
+window = sg.Window('SCAPA', layout, size=(1600,800), resizable=True)
 
 pkt_list = []
 
@@ -275,7 +265,6 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
             src = pkt['IP'].src
             dest = pkt['IP'].dst
             proto = proto_name_by_num(pkt['IP'].proto).lower()   #protocol number to protocol name
-            #print(proto)
             sport = pkt['IP'].sport
             dport = pkt['IP'].dport
 
@@ -302,9 +291,6 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
                 else:
                     chkdestport = dport
 
-                # print("chk \n", str(chksrcip) , str(chkdestip) , str(chkproto) , str(chkdestport) , str(chksrcport))
-                # print("act \n", str(src) , str(dest) , str(proto) , str(dport) , str(sport))
-
                 if "/" not in str(chksrcip).strip() and "/" not in str(chkdestip).strip():
                     if (str(src).strip() == str(chksrcip).strip() and str(dest).strip() == str(chkdestip).strip() and str(proto).strip() == str(chkproto).strip() and str(dport).strip() == str(chkdestport).strip() and str(sport).strip() == str(chksrcport).strip()):
                         flagpacket = True
@@ -319,7 +305,6 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
                         flagpacket = True
 
                 if flagpacket == True:
-                    # print("Match")
                     if proto == "tcp":
                         try:
                             readable_payload = bytes(pkt['TCP'].payload).decode('UTF8','replace')
@@ -344,9 +329,6 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
         except:
             pkt.show()
 
-    # for protocol in alertprotocols:
-    #     if protocol.upper() in pkt:
-    #         pass
     return False, ""
 
 
@@ -395,13 +377,6 @@ def pkt_process(pkt):
     global MLresult
 
     pkt_summary = pkt.summary()
-    #print("\n", src, " : ", dest, "\n")
-    # if dest in deviceiplist:
-    #     print(f"\n[*] INCOMING PACKET from \n")
-    #     if updatepktlist:
-
-    #     lastpacket = pkt_summary
-    #     return pkt_summary
     pktsummarylist.append(f"{len(pktsummarylist)} " + pkt_summary)
     pkt_list.append(pkt)
 
@@ -410,31 +385,6 @@ def pkt_process(pkt):
         suspiciouspackets.append(f"{len(suspiciouspackets)} {len(pktsummarylist) - 1}" + pkt_summary + f" MSG: {sus_msg}")
         suspacketactual.append(pkt)
 
-
-    # if 'IP' in pkt:
-    #     proto = proto_name_by_num(pkt['IP'].proto).lower()
-    #     if proto == "tcp":
-    #         try:
-    #             readable_payload = bytes(pkt['TCP'].payload).decode('UTF8','replace')
-    #             all_readablepayloads.append(readable_payload)
-    #         except Exception as ex:
-    #             all_readablepayloads.append("Error getting tcp payload!!")
-    #             print(ex)
-    #             pass
-    #     elif proto == "udp":
-    #         try:
-    #             readable_payload = bytes(pkt['UDP'].payload).decode('UTF8','replace')
-    #             all_readablepayloads.append(readable_payload)
-    #         except Exception as ex:
-    #             all_readablepayloads.append("Error getting udp payload!!")
-    #             print(ex)
-    #             pass
-    #     else:
-    #         all_readablepayloads.append("NOT TCP PACKET!!")
-    #     if updatepktlist:
-    #         window['-payloaddecodedall-'].update(value=all_readablepayloads[-1])
-    #print(suspiciouspackets)
-    #pkt.show()
 
     global duration, start_time, protocol_type, src_bytes, dst_bytes, flag, land, urgent, wrong_fragment, num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate, diff_srv_rate, srv_diff_host_rate
 
@@ -448,8 +398,6 @@ def pkt_process(pkt):
         protocol_type = "tcp"
     elif pkt.haslayer(UDP):
         protocol_type = "udp"
-    else:
-        protocol_type = pkt[IP].proto  # for other IP protocols
 
     # Determine service (using ports for simplicity)
     if pkt.haslayer(TCP) or pkt.haslayer(UDP):
@@ -560,11 +508,8 @@ def pkt_process(pkt):
 
     model_predict = model.predict(Pkt_Info_List)
 
-    print(model_predict)
 
     MLresult.append(model_predict)
-
-    window["-ML-"].update(values=MLresult)
 
     return
 
@@ -613,7 +558,7 @@ def load_tcp_streams(window):     #the fuction reads the latest packet capture a
     number_of_streams = 0
     for pkt in cap1:
         if pkt.highest_layer.lower() == "tcp" or pkt.highest_layer.lower() == "tls":
-            print(pkt.tcp.stream)
+            #print(pkt.tcp.stream)
             if int(pkt.tcp.stream) > number_of_streams:
                 number_of_streams = int(pkt.tcp.stream) + 1
     for i in range(0, number_of_streams):
@@ -634,18 +579,14 @@ def load_tcp_streams(window):     #the fuction reads the latest packet capture a
         window['-http2streams-'].update(values=http2streams)
         pass
 
-global inc_pkt_list
 def show_http2_stream(window, streamno):         #Show the selected hhp2 stream in a new window
     global SSLLOGFILEPATH
     tcpstreamfilename = ".\\temp\\tcpstreamread.pcap"
     cap3 = pyshark.FileCapture(tcpstreamfilename, display_filter = f'http2.streamid eq {str(http2streamindex)}', override_prefs={'ssl.keylog_file': SSLLOGFILEPATH})
-    #print(cap3[0].http2.stream)
     dat = ""
     decode_hex = codecs.getdecoder("hex_codec")
     http_payload = bytes()
     for pkt in cap3:
-        # for x in pkt[pkt.highest_layer]._get_all_field_lines():
-        #     print(x)
         try:
             payload = pkt["TCP"].payload
             http_payload += scp.raw(payload)
@@ -663,26 +604,9 @@ def show_http2_stream(window, streamno):         #Show the selected hhp2 stream 
                     if field == 'http2.header.name.length':
                         rawvallengthpassed = True
                 else:
-                    #if field.split(".")[-1] != "headers":
                     http2headerdat += str(field.split(".")[-1]) + " : " + str(val) + " \n"
                     print(http2headerdat)
             dat += "\n" + http2headerdat
-            # httpdat = "".join("".join({val for key,val in pkt.http2._all_fields.items() if key == 'http2.data.data'}).split(":"))
-            # httpdatdecoded = decode_hex(httpdat)[0]
-            # dat += httpdatdecoded
-            # dat = pkt.pretty_print
-            # payload = pkt.http2.payload
-            # if hasattr(pkt,'http2'):
-            #     if hasattr(pkt.http2,'json_object'):
-            #         if hasattr(pkt.http2,'body_reassembled_data'):
-            #             avp=json.loads(codecs.decode(pkt.http2.body_reassembled_data.raw_value,'hex'))
-            # # encryptedapplicationdata_hex = "".join(payload.split(":")[0:len(payload.split(":"))])
-            # # encryptedapplicationdata_hex_decoded = decode_hex(encryptedapplicationdata_hex)[0]
-            # # dat += encryptedapplicationdata_hex_decoded
-            #             dat += avp
-            #print(encryptedapplicationdata_hex_decoded)
-        # except Exception as ex:
-        #     print(ex)
 
     if len(http_payload):
         http_headers = get_http_headers(http_payload)
@@ -692,16 +616,11 @@ def show_http2_stream(window, streamno):         #Show the selected hhp2 stream 
 
             dat += object_type + "\n" + object_found + "\n"
 
-
     print(dat)
     formatteddat = dat
-    # formatteddat = str(dat, "ascii", "replace")
-    #show_tcp_stream_openwin(formatteddat)
     print(formatteddat)
-
     show_http2_stream_openwin(formatteddat)
-    # os.remove(tcpstreamfilename)
-    #print(formatteddat)
+
     pass
 
 def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if it's decodable by cross checking with ssl log file
@@ -713,38 +632,24 @@ def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if i
         display_filter = 'tcp.stream eq %d' % streamnumber,
         override_prefs={'ssl.keylog_file': SSLLOGFILEPATH}
     )
+
     dat = b""
     decode_hex = codecs.getdecoder("hex_codec")
     for pkt in cap:
-        # for x in pkt[pkt.highest_layer]._get_all_field_lines():
-        #     print(x)
         try:
             payload = pkt.tcp.payload
             encryptedapplicationdata_hex = "".join(payload.split(":")[0:len(payload.split(":"))])
             encryptedapplicationdata_hex_decoded = decode_hex(encryptedapplicationdata_hex)[0]
             dat += encryptedapplicationdata_hex_decoded
-            #print(encryptedapplicationdata_hex_decoded)
         except Exception as ex:
             print(ex)
 
     formatteddat = str(dat, "ascii", "replace")
 
-    # dat1 = ""
-    # try:
-    #     if pkt.http > 0:
-    #         dat1 += "Stream Index :" , str(pkt.tcp.stream) # to print stream index at the start
-
-    #         dat1 += "\nHTTP LAYER :", str(pkt.http).replace('\\n', '').replace('\\r', '')
-
-    # except:
-    #     pass
-    #show_tcp_stream_openwin(formatteddat)
     if formatteddat.strip() == "" or len(str(formatteddat.strip)) < 1:
         sg.PopupAutoClose("No data")
     else:
         show_tcp_stream_openwin(formatteddat)
-    # os.remove(tcpstreamfilename)
-    #print(formatteddat)
 
 while True:
 
@@ -771,17 +676,14 @@ while True:
             if event == '-refreshrules-':
                 process_rules(readrules())
             if event == sg.TIMEOUT_EVENT:
-                #window['-pkts-'].update(pktsummarylist, scroll_to_index=len(pktsummarylist))
                 window['-pkts-'].update(suspiciouspackets, scroll_to_index=len(suspiciouspackets))
                 window['-pktsall-'].update(pktsummarylist, scroll_to_index=len(pktsummarylist))
                 window["-ML-"].update(MLresult, scroll_to_index=len(MLresult))
-                #window['-payloaddecoded-'].update(value=sus_readablepayloads[len(suspiciouspackets)])
             if event in (None, 'Exit'):
                 sys.exit()
                 break
             if event == '-pkts-' and len(values['-pkts-']):     # if a list item is chosen
                 sus_selected = values['-pkts-']
-                #sus_selected_index = int(sus_selected.split()[0][0:2])
                 sus_selected_index = values[event][0]
                 try:
                     window["-tcpstreams-"].update(scroll_to_index=int(suspacketactual[sus_selected_index].tcp.stream))
@@ -796,11 +698,6 @@ while True:
                 except:
                     pass
 
-            if event == "-ML-":
-                window.Element('-ML-').Update(values=[event, MLresult, 'new value 3'])
-            #     #sus_selected_index = int(sus_selected.split()[0][0:2])
-            #     pktselectedindex = window['-pktsall-'].get_indexes()[0]
-            #     window['-payloaddecodedall-'].update(value=all_readablepayloads[pktselectedindex])
             if event == "-showtcpstreamsbtn-":      # load tcp streams btn
                 load_tcp_streams(window)
             if event == "-tcpstreams-":
@@ -836,7 +733,6 @@ while True:
         print(http2streamindex)
         show_http2_stream(window, str(int(http2streamindex)))
     if event == '-pktsall-' and len(values['-pktsall-']):     # if a list item is chosen
-        #pktselected = values['-pktsall-']
         pkt_selected_index = window["-pktsall-"].get_indexes()[0]
         try:
             window["-tcpstreams-"].update(scroll_to_index=int(pkt_list[pkt_selected_index].tcp.stream))
@@ -849,7 +745,6 @@ while True:
 
     if event == '-pkts-' and len(values['-pkts-']):     # if a list item is chosen
         sus_selected = values['-pkts-']
-        #sus_selected_index = int(sus_selected.split()[0][0:2])
         sus_selected_index = window['-pkts-'].get_indexes()[0]
         try:
             window["-tcpstreams-"].update(scroll_to_index=int(suspacketactual[sus_selected_index].tcp.stream))
@@ -864,19 +759,7 @@ while True:
         streamindex = window["-tcpstreams-"].get_indexes()
         show_tcpstream(window, streamindex)
 
-        # if event == '-pktsall-' and len(values['-pktsall-']):     # if a list item is chosen
-    #             pktselected = values['-pktsall-']
-    #             #sus_selected_index = int(sus_selected.split()[0][0:2])
-    #             pktselectedindex = window['-pktsall-'].get_indexes()[0]
-    #             window['-payloaddecodedall-'].update(value=all_readablepayloads[pktselectedindex])
     if event in (None, 'Exit'):
         break
 
-
 window.close()
-
-################################################################################################################
-
-
-
-
