@@ -7,7 +7,7 @@ import sys
 import pyshark
 import socket
 import scapy.arch.windows as scpwinarch
-from scapy.all import sniff, IP, TCP, UDP, Raw
+from scapy.all import sniff, IP, TCP, UDP, ICMP, Raw
 import time
 from collections import defaultdict
 import json
@@ -43,8 +43,6 @@ alertsrcips = []
 alertsrcports = []
 alertdestports = []
 alertmsgs = []
-
-# rule format --> "alert [srcip] [srcport] --> [dstip] [dstport] [msg]" [msg] may include spaces and is not within quotes
 
 def process_rules(rulelist): #function for processing each rule and add each segment of the rule to the right list at the right index, concatenation of the same index of each list will give us therule back
     global alertprotocols
@@ -95,13 +93,6 @@ def process_rules(rulelist): #function for processing each rule and add each seg
         except:
             alertmsgs.append("")
             pass
-
-    #print(alertprotocols)
-    #print(alertdestips)
-    #print(alertsrcips)
-    #print(alertsrcports)
-    #print(alertdestports)
-    #print(alertmsgs)
 
 process_rules(readrules())
 
@@ -189,10 +180,6 @@ def extract_object(headers, http_payload): # This function extracts the http obj
             object_extracted = http_payload[http_payload.index(b"\r\n\r\n") +4:]
             object_type = object_extracted[:2]
             logging.info("Object Type: %s" % object_type)
-            # else:
-            #     logging.debug('Content Type did not matched with filters - %s' % headers[b'Content-Type'])
-            #     if len(http_payload) > 10:
-            #         logging.debug('Object first 50 bytes - %s' % str(http_payload[:50]))
         else:
             logging.info('No Content Type in Package')
             logging.debug(headers.keys())
@@ -259,7 +246,7 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
     global alertmsgs
     global sus_readablepayloads
     global updatepktlist
-
+    global proto
     if 'IP' in pkt:
         try:
             src = pkt['IP'].src
@@ -340,7 +327,7 @@ time_window = 2  # Time window in seconds for rate calculations
 
 # Initialize global variables for capturing features
 start_time = None
-protocol_type = ""
+#protocol_type = ""
 service = ""
 src_bytes = 0
 dst_bytes = 0
@@ -386,18 +373,21 @@ def pkt_process(pkt):
         suspacketactual.append(pkt)
 
 
-    global duration, start_time, protocol_type, src_bytes, dst_bytes, flag, land, urgent, wrong_fragment, num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate, diff_srv_rate, srv_diff_host_rate
-
+    global duration, start_time, src_bytes, dst_bytes, flag, land, urgent, wrong_fragment, num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate, diff_srv_rate, srv_diff_host_rate
+    #global protocol_type
     # Calculate duration (in seconds)
     if start_time is None:
         start_time = time.time()
-    duration = time.time() - start_time
-
+    duration = 0
+    """
     # Extract protocol type (TCP, UDP)
     if pkt.haslayer(TCP):
         protocol_type = "tcp"
     elif pkt.haslayer(UDP):
         protocol_type = "udp"
+    elif pkt.haslayer(ICMP):
+        protocol_type = "icmp"
+    """
 
     # Determine service (using ports for simplicity)
     if pkt.haslayer(TCP) or pkt.haslayer(UDP):
@@ -494,11 +484,12 @@ def pkt_process(pkt):
         srv_diff_host_rate = len(set([conn['dst_ip'] for conn in connections[src_ip] if conn[
             'service'] == service])) / srv_total_connections if srv_total_connections > 0 else 0
 
+    #print(proto)
 
-
-    Pkt_Info_List = numpy.array([[duration, protocol_type, flag, src_bytes, dst_bytes, land, wrong_fragment, urgent,
+    Pkt_Info_List = numpy.array([[duration, proto, flag, src_bytes, dst_bytes, land, wrong_fragment, urgent,
                                   num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate,
-                                  diff_srv_rate, srv_diff_host_rate]])
+                                  diff_srv_rate, round(srv_diff_host_rate,2)]])
+    #print(Pkt_Info_List)
     if flag not in fmap.keys():
         Pkt_Info_List[0][2] = 0
     else:
@@ -507,7 +498,6 @@ def pkt_process(pkt):
     Pkt_Info_List[0][1] = pmap[Pkt_Info_List[0][1]]
 
     model_predict = model.predict(Pkt_Info_List)
-
 
     MLresult.append(model_predict)
 
@@ -590,7 +580,6 @@ def show_http2_stream(window, streamno):         #Show the selected hhp2 stream 
         try:
             payload = pkt["TCP"].payload
             http_payload += scp.raw(payload)
-            #does literally nothing because we do not know the encoding format of the payload so scp.raw returns type error
         except:
             pass
 
