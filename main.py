@@ -363,6 +363,9 @@ def pkt_process(pkt):
     global pkt_list
     global MLresult
 
+    if not updatepktlist:
+        return
+
     pkt_summary = pkt.summary()
     pktsummarylist.append(f"{len(pktsummarylist)} " + pkt_summary)
     pkt_list.append(pkt)
@@ -498,8 +501,10 @@ def pkt_process(pkt):
     Pkt_Info_List[0][1] = pmap[Pkt_Info_List[0][1]]
 
     model_predict = model.predict(Pkt_Info_List)
+    clean_prediction = str(model_predict).strip("[]'\"")          #to remove special characters from the output
+    MLresult.append(f"{len(MLresult)} " + f"[{clean_prediction}]")        # add the packet number
 
-    MLresult.append(model_predict)
+    #MLresult.append(model_predict)
 
     return
 
@@ -639,6 +644,10 @@ def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if i
         sg.PopupAutoClose("No data")
     else:
         show_tcp_stream_openwin(formatteddat)
+layout = [
+    # Other UI elements...
+    [sg.Multiline(size=(100, 20), key='-payloaddecoded-', disabled=True)],  # Decoding section
+]
 
 while True:
 
@@ -659,9 +668,13 @@ while True:
         sus_readablepayloads = []
         while True:
             event, values = window.read(timeout=10)
-            if event == "-stopcap-":
-                updatepktlist = False
+            if event == "-stopcap-":  # User clicked Stop
+                updatepktlist = False  # Stop capturing packets
+                # Ensure packet data is retained and listboxes remain functional
+                window["-pkts-"].update(values=suspiciouspackets)  # Retain suspicious packets list
+                window["-ML-"].update(values=MLresult)  # Retain ML results list
                 break
+
             if event == '-refreshrules-':
                 process_rules(readrules())
             if event == sg.TIMEOUT_EVENT:
@@ -671,14 +684,43 @@ while True:
             if event in (None, 'Exit'):
                 sys.exit()
                 break
-            if event == '-pkts-' and len(values['-pkts-']):     # if a list item is chosen
-                sus_selected = values['-pkts-']
-                sus_selected_index = values[event][0]
+
+            if event == "-pkts-" and len(values["-pkts-"]):  # User clicked on an alerted packet
+                selected_index = window["-pkts-"].get_indexes()[0]  # Get the index of the selected packet
                 try:
-                    window["-tcpstreams-"].update(scroll_to_index=int(suspacketactual[sus_selected_index].tcp.stream))
-                except:
-                    pass
-                window['-payloaddecoded-'].update(value=sus_readablepayloads[sus_selected_index ])
+                    # Fetch the corresponding packet
+                    packet = suspacketactual[selected_index]  # Get the actual suspicious packet
+
+                    # Decode packet details using Scapy's show() and raw payload
+                    packet_headers = packet.show(dump=True)  # Get detailed packet headers
+                    packet_payload = ""
+                    if packet.haslayer("Raw"):  # Check for payload
+                        packet_payload = packet["Raw"].load.decode("utf-8", errors="replace")
+
+                    # Update the decoding section of the GUI dynamically
+                    window["-payloaddecoded-"].update(value=f"{packet_headers}\n\nPayload:\n{packet_payload}")
+
+                except IndexError:
+                    sg.Popup("No corresponding packet found for the selected alert!", auto_close=True)
+
+            if event == "-ML-" and len(values["-ML-"]):  # User clicked on an ML result
+                selected_index = window["-ML-"].get_indexes()[0]  # Get the index of the selected ML result
+                try:
+                    # Fetch the corresponding packet
+                    packet = pkt_list[selected_index]  # Get the ML-related packet
+
+                    # Decode packet details using Scapy's show() and raw payload
+                    packet_headers = packet.show(dump=True)  # Get detailed packet headers
+                    packet_payload = ""
+                    if packet.haslayer("Raw"):  # Check for payload
+                        packet_payload = packet["Raw"].load.decode("utf-8", errors="replace")
+
+                    # Update the decoding section of the GUI dynamically
+                    window["-payloaddecoded-"].update(value=f"{packet_headers}\n\nPayload:\n{packet_payload}")
+
+                except IndexError:
+                    sg.Popup("No corresponding packet found for the selected ML result!", auto_close=True)
+
             if event == '-pktsall-' and len(values['-pktsall-']):     # if a list item is chosen
                 #pktselected = values['-pktsall-']
                 pkt_selected_index = window["-pktsall-"].get_indexes()
@@ -712,7 +754,41 @@ while True:
         httpobjecttypes = []
         httpobjectindexes, httpobjectactuals, httpobjecttypes = read_http()
         window["-httpobjects-"].update(values=httpobjectindexes)
+    if event == "-pkts-" and len(values["-pkts-"]):  # User clicked on an alerted packet
+        selected_index = window["-pkts-"].get_indexes()[0]  # Get the index of the selected packet
+        try:
+            # Fetch the corresponding packet
+            packet = suspacketactual[selected_index]  # Get the actual suspicious packet
 
+            # Decode packet details using Scapy's show() and raw payload
+            packet_headers = packet.show(dump=True)  # Get detailed packet headers
+            packet_payload = ""
+            if packet.haslayer("Raw"):  # Check for payload
+                packet_payload = packet["Raw"].load.decode("utf-8", errors="replace")
+
+            # Update the decoding section of the GUI dynamically
+            window["-payloaddecoded-"].update(value=f"{packet_headers}\n\nPayload:\n{packet_payload}")
+
+        except IndexError:
+            sg.Popup("No corresponding packet found for the selected alert!", auto_close=True)
+
+    if event == "-ML-" and len(values["-ML-"]):  # User clicked on an ML result
+        selected_index = window["-ML-"].get_indexes()[0]  # Get the index of the selected ML result
+        try:
+            # Fetch the corresponding packet
+            packet = pkt_list[selected_index]  # Get the ML-related packet
+
+            # Decode packet details using Scapy's show() and raw payload
+            packet_headers = packet.show(dump=True)  # Get detailed packet headers
+            packet_payload = ""
+            if packet.haslayer("Raw"):  # Check for payload
+                packet_payload = packet["Raw"].load.decode("utf-8", errors="replace")
+
+            # Update the decoding section of the GUI dynamically
+            window["-payloaddecoded-"].update(value=f"{packet_headers}\n\nPayload:\n{packet_payload}")
+
+        except IndexError:
+            sg.Popup("No corresponding packet found for the selected ML result!", auto_close=True)
     if event == "-httpobjects-":
         httpobjectindex = values[event][0]
         show_http2_stream_openwin(httpobjecttypes[httpobjectindex] + b"\n" + httpobjectactuals[httpobjectindex][:900])
