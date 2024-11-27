@@ -19,12 +19,41 @@ import pprint
 import glob
 import pickle
 import numpy
+import winsound
+from plyer import notification
+from win10toast import ToastNotifier
+from win10toast_click import ToastNotifier
+from tkinter import Tk, messagebox
 from sklearn.ensemble import RandomForestClassifier
 
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 #rules ---->        instruction  protocol  sourceIP  sourcePort  direction  destinationIP  destinationPort  message
 
+"""
+toaster = ToastNotifier()
+
+def alert_user(message):
+    #Send desktop notification with sound.
+    # Play alert sound
+    winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
+
+    # Display desktop notification
+    notification.notify(
+        title="Intrusion Detection Alert",
+        message=message,
+        app_name="SCAPA",
+        timeout=10
+    )
+    root = Tk()
+    root.withdraw()  # Hide the main tkinter window
+
+    # Display the message box
+    messagebox.showinfo("Intrusion Detection Alert", message)
+
+    # Destroy the root window after the message box is closed
+    root.destroy()
+"""
 def readrules():
     rulefile = "rules.txt"
     ruleslist = []
@@ -103,7 +132,6 @@ suspiciouspackets = []
 suspacketactual = []
 lastpacket = ""
 sus_readablepayloads = []
-all_readablepayloads = []
 tcpstreams = []
 SSLLOGFILEPATH = "C:\\Users\\Mostafa\\ssl1.log"
 http2streams=[]
@@ -292,9 +320,10 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
                         flagpacket = True
 
                 if flagpacket == True:
+                    #alert_user("Alert! \nsuspicious Packet has been captured")
                     if proto == "tcp":
                         try:
-                            readable_payload = bytes(pkt['TCP'].payload).decode('UTF8','replace')
+                            readable_payload = bytes(pkt['TCP'].payload).decode("utf-8", errors="replace")
                             sus_readablepayloads.append(readable_payload)
                         except Exception as ex:
                             sus_readablepayloads.append("Error getting tcp payload!!")
@@ -302,7 +331,7 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
                             pass
                     elif proto == "udp":
                         try:
-                            readable_payload = bytes(pkt['UDP'].payload).decode('UTF8','replace')
+                            readable_payload = bytes(pkt['UDP'].payload).decode("utf-8", errors="replace")
                             sus_readablepayloads.append(readable_payload)
                         except Exception as ex:
                             sus_readablepayloads.append("Error getting udp payload!!")
@@ -358,7 +387,6 @@ def pkt_process(pkt):
     global window
     global updatepktlist
     global suspiciouspackets
-    global all_readablepayloads
     global pktsummarylist
     global pkt_list
     global MLresult
@@ -371,26 +399,17 @@ def pkt_process(pkt):
     pkt_list.append(pkt)
 
     sus_pkt, sus_msg = check_rules_warning(pkt)
-    if sus_pkt == True:
+    if sus_pkt:
         suspiciouspackets.append(f"{len(suspiciouspackets)} {len(pktsummarylist) - 1}" + pkt_summary + f" MSG: {sus_msg}")
         suspacketactual.append(pkt)
 
 
-    global duration, start_time, src_bytes, dst_bytes, flag, land, urgent, wrong_fragment, num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate, diff_srv_rate, srv_diff_host_rate
+    global duration, service, start_time, src_bytes, dst_bytes, flag, land, urgent, wrong_fragment, num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate, diff_srv_rate, srv_diff_host_rate
     #global protocol_type
     # Calculate duration (in seconds)
     if start_time is None:
         start_time = time.time()
     duration = 0
-    """
-    # Extract protocol type (TCP, UDP)
-    if pkt.haslayer(TCP):
-        protocol_type = "tcp"
-    elif pkt.haslayer(UDP):
-        protocol_type = "udp"
-    elif pkt.haslayer(ICMP):
-        protocol_type = "icmp"
-    """
 
     # Determine service (using ports for simplicity)
     if pkt.haslayer(TCP) or pkt.haslayer(UDP):
@@ -644,14 +663,10 @@ def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if i
         sg.PopupAutoClose("No data")
     else:
         show_tcp_stream_openwin(formatteddat)
-layout = [
-    # Other UI elements...
-    [sg.Multiline(size=(100, 20), key='-payloaddecoded-', disabled=True)],  # Decoding section
-]
 
 while True:
 
-    print(suspiciouspackets)
+    #print(suspiciouspackets)
 
     event, values = window.read()
     if event == '-refreshrules-':
@@ -711,12 +726,9 @@ while True:
 
                     # Decode packet details using Scapy's show() and raw payload
                     packet_headers = packet.show(dump=True)  # Get detailed packet headers
-                    packet_payload = ""
-                    if packet.haslayer("Raw"):  # Check for payload
-                        packet_payload = packet["Raw"].load.decode("utf-8", errors="replace")
 
                     # Update the decoding section of the GUI dynamically
-                    window["-payloaddecoded-"].update(value=f"{packet_headers}\n\nPayload:\n{packet_payload}")
+                    window["-payloaddecoded-"].update(value=f"{packet_headers}\n")
 
                 except IndexError:
                     sg.Popup("No corresponding packet found for the selected ML result!", auto_close=True)
@@ -780,12 +792,10 @@ while True:
 
             # Decode packet details using Scapy's show() and raw payload
             packet_headers = packet.show(dump=True)  # Get detailed packet headers
-            packet_payload = ""
-            if packet.haslayer("Raw"):  # Check for payload
-                packet_payload = packet["Raw"].load.decode("utf-8", errors="replace")
+
 
             # Update the decoding section of the GUI dynamically
-            window["-payloaddecoded-"].update(value=f"{packet_headers}\n\nPayload:\n{packet_payload}")
+            window["-payloaddecoded-"].update(value=f"{packet_headers}\n")
 
         except IndexError:
             sg.Popup("No corresponding packet found for the selected ML result!", auto_close=True)
