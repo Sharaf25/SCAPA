@@ -13,3 +13,5 @@ logging
 re
 ipaddress
 scikit-learn
+plyer
+tkinter

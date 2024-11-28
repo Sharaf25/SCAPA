@@ -21,8 +21,6 @@ import pickle
 import numpy
 import winsound
 from plyer import notification
-from win10toast import ToastNotifier
-from win10toast_click import ToastNotifier
 from tkinter import Tk, messagebox
 from sklearn.ensemble import RandomForestClassifier
 
@@ -30,21 +28,11 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 #rules ---->        instruction  protocol  sourceIP  sourcePort  direction  destinationIP  destinationPort  message
 
-"""
-toaster = ToastNotifier()
-
 def alert_user(message):
     #Send desktop notification with sound.
     # Play alert sound
     winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
 
-    # Display desktop notification
-    notification.notify(
-        title="Intrusion Detection Alert",
-        message=message,
-        app_name="SCAPA",
-        timeout=10
-    )
     root = Tk()
     root.withdraw()  # Hide the main tkinter window
 
@@ -53,7 +41,7 @@ def alert_user(message):
 
     # Destroy the root window after the message box is closed
     root.destroy()
-"""
+
 def readrules():
     rulefile = "rules.txt"
     ruleslist = []
@@ -264,7 +252,7 @@ def proto_name_by_num(proto_num):
         if name.startswith("IPPROTO") and proto_num == num:
             return name[8:]
     return "Protocol not found"
-
+Alert_Lock = True
 def check_rules_warning(pkt):      #function to check if the packet should be flagged according to the rules
     global alertprotocols
     global alertdestips
@@ -275,6 +263,7 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
     global sus_readablepayloads
     global updatepktlist
     global proto
+    global Alert_Lock
     if 'IP' in pkt:
         try:
             src = pkt['IP'].src
@@ -319,8 +308,10 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
                     if (str(src).strip() == str(chksrcip).strip() and ipaddress.IPv4Address(str(dest).strip()) in ipaddress.IPv4Network(str(chkdestip).strip()) and str(proto).strip() == str(chkproto).strip() and str(dport).strip() == str(chkdestport).strip() and str(sport).strip() == str(chksrcport).strip()):
                         flagpacket = True
 
-                if flagpacket == True:
-                    #alert_user("Alert! \nsuspicious Packet has been captured")
+                if flagpacket:
+                    if Alert_Lock:
+                        alert_user("ALERT !!!!!!!!!\nSuspicious Packet has been Captured")
+                        Alert_Lock = False
                     if proto == "tcp":
                         try:
                             readable_payload = bytes(pkt['TCP'].payload).decode("utf-8", errors="replace")
@@ -346,7 +337,6 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
             pkt.show()
 
     return False, ""
-
 
 # Track connection and error statistics
 connections = defaultdict(list)  # Store connection data per IP
@@ -478,11 +468,11 @@ def pkt_process(pkt):
         count = len([conn for conn in connections[src_ip]])
 
         # Check for SYN and REJ errors (SYN = 0x02, RST = 0x04)
-        if flags == 0x02:  # SYN flag set
+        if flag == 0x02:  # SYN flag set
             if not pkt[TCP].ack:
                 error_stats[src_ip]['syn_errors'] += 1
 
-        if flags == 0x04:  # REJ (RST) flag set
+        if flag == 0x04:  # REJ (RST) flag set
             error_stats[src_ip]['rej_errors'] += 1
 
         # Calculate error rates (SYN and REJ)
@@ -555,7 +545,7 @@ def show_http2_stream_openwin(tcpstreamtext):     #this function shows http2 inf
     window.close()
 
 def load_tcp_streams(window):     #the fuction reads the latest packet capture after saving it in the temp folder
-    global http2streams
+    global http2streams, http2_stream_id
     global logdecodedtls
     try:
         os.remove(f".\\temp\\tcpstreamread.pcap")
@@ -633,7 +623,6 @@ def show_http2_stream(window, streamno):         #Show the selected hhp2 stream 
     formatteddat = dat
     print(formatteddat)
     show_http2_stream_openwin(formatteddat)
-
     pass
 
 def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if it's decodable by cross checking with ssl log file
@@ -685,6 +674,7 @@ while True:
             event, values = window.read(timeout=10)
             if event == "-stopcap-":  # User clicked Stop
                 updatepktlist = False  # Stop capturing packets
+                Alert_Lock = True
                 # Ensure packet data is retained and listboxes remain functional
                 window["-pkts-"].update(values=suspiciouspackets)  # Retain suspicious packets list
                 window["-ML-"].update(values=MLresult)  # Retain ML results list
@@ -698,7 +688,7 @@ while True:
                 window["-ML-"].update(MLresult, scroll_to_index=len(MLresult))
             if event in (None, 'Exit'):
                 sys.exit()
-                break
+
 
             if event == "-pkts-" and len(values["-pkts-"]):  # User clicked on an alerted packet
                 selected_index = window["-pkts-"].get_indexes()[0]  # Get the index of the selected packet
