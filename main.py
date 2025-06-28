@@ -294,7 +294,8 @@ def create_pcap_file_safely(filepath: str, packets: list) -> bool:
         
         # Set file permissions to be readable by all (required for tshark)
         os.chmod(filepath, 0o644)
-         # If we're running as root but original user exists, fix ownership
+        
+        # If we're running as root but original user exists, fix ownership
         if original_user and os.geteuid() == 0:
             try:
                 user_info = pwd.getpwnam(original_user)
@@ -348,7 +349,8 @@ def create_secure_pcap_file(filename, packet_list):
         
         # Set permissions to be readable by all
         os.chmod(filename, 0o644)
-         # If we're running as root but original user exists, fix ownership
+        
+        # If we're running as root but original user exists, fix ownership
         if original_user and os.geteuid() == 0:
             try:
                 user_info = pwd.getpwnam(original_user)
@@ -984,7 +986,6 @@ logging.info(f"Initializing packet capture on interfaces: {available_interfaces}
 
 # Check if we have permission for packet capture
 try:
-    import os
     if os.geteuid() != 0 and platform.system() != "Windows":
         logging.warning("Not running as root - packet capture may be limited")
         logging.info("For full packet capture, run: sudo python main.py")
