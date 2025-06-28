@@ -6,7 +6,10 @@ import threading
 import sys
 import pyshark
 import socket
-import scapy.arch.windows as scpwinarch
+# Platform-specific imports
+import platform
+if platform.system() == "Windows":
+    import scapy.arch.windows as scpwinarch
 from scapy.all import sniff, IP, TCP, UDP, ICMP, Raw
 import time
 from collections import defaultdict
@@ -19,7 +22,11 @@ import pprint
 import glob
 import pickle
 import numpy
-import winsound
+# Cross-platform alert handling
+try:
+    import winsound
+except ImportError:
+    winsound = None
 from plyer import notification
 from tkinter import Tk, messagebox
 from sklearn.ensemble import RandomForestClassifier
@@ -29,18 +36,46 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 #rules ---->        instruction  protocol  sourceIP  sourcePort  direction  destinationIP  destinationPort  message
 
 def alert_user(message):
-    #Send desktop notification with sound.
-    # Play alert sound
-    winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
-
-    root = Tk()
-    root.withdraw()  # Hide the main tkinter window
-
-    # Display the message box
-    messagebox.showinfo("Intrusion Detection Alert", message)
-
-    # Destroy the root window after the message box is closed
-    root.destroy()
+    """Send desktop notification with sound - cross-platform"""
+    try:
+        # Cross-platform desktop notification
+        from plyer import notification
+        notification.notify(
+            title="SCAPA Security Alert",
+            message=message,
+            timeout=10
+        )
+        
+        # Cross-platform sound alert
+        if platform.system() == "Windows" and winsound:
+            # Windows system sound
+            winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        else:
+            # Unix-like systems - try different approaches
+            try:
+                # Try using system bell
+                print('\a')  # ASCII bell character
+                # Alternative: use paplay on Linux
+                if platform.system() == "Linux":
+                    subprocess.run(["paplay", "/usr/share/sounds/alsa/Front_Left.wav"], 
+                                 check=False, timeout=1, capture_output=True)
+                # Alternative: use afplay on macOS
+                elif platform.system() == "Darwin":
+                    subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], 
+                                 check=False, timeout=1, capture_output=True)
+            except Exception:
+                pass  # Sound alert failed, but continue
+        
+        # Always show message box as fallback
+        root = Tk()
+        root.withdraw()  # Hide the main tkinter window
+        messagebox.showinfo("Intrusion Detection Alert", message)
+        root.destroy()
+        
+    except Exception as e:
+        logging.error(f"Error showing alert: {e}")
+        # Fallback to console output
+        print(f"\n*** SECURITY ALERT ***\n{message}\n")
 
 def readrules():
     rulefile = "rules.txt"
@@ -113,6 +148,27 @@ def process_rules(rulelist): #function for processing each rule and add each seg
 
 process_rules(readrules())
 
+# Cross-platform file paths
+def get_cross_platform_paths():
+    """Get appropriate file paths for the current platform"""
+    if platform.system() == "Windows":
+        ssl_log_path = os.path.expanduser("~/ssl_keys.log")
+        temp_dir = ".\\temp\\"
+        saved_dir = ".\\savedpcap\\"
+    else:
+        ssl_log_path = os.path.expanduser("~/ssl_keys.log")
+        temp_dir = "./temp/"
+        saved_dir = "./savedpcap/"
+    
+    # Ensure directories exist
+    os.makedirs(os.path.dirname(temp_dir) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(saved_dir) or ".", exist_ok=True)
+    
+    return ssl_log_path, temp_dir, saved_dir
+
+# Get platform-specific paths
+SSLLOGFILEPATH, TEMP_DIR, SAVED_DIR = get_cross_platform_paths()
+
 
 MLresult = []
 pktsummarylist = []
@@ -121,7 +177,6 @@ suspacketactual = []
 lastpacket = ""
 sus_readablepayloads = []
 tcpstreams = []
-SSLLOGFILEPATH = "C:\\Users\\Mostafa\\ssl1.log"
 http2streams=[]
 logdecodedtls = True
 httpobjectindexes = []
@@ -214,10 +269,10 @@ def read_http():   #This function creats a temporary pcap file containing captur
     objectcount = 0
     global pkt_list
     try:
-        os.remove(f".\\temp\\httpstreamread.pcap")
+        os.remove(os.path.join(TEMP_DIR, "httpstreamread.pcap"))
     except:
         pass
-    httppcapfile = f".\\temp\\httpstreamread.pcap"
+    httppcapfile = os.path.join(TEMP_DIR, "httpstreamread.pcap")
     scp.wrpcap(httppcapfile, pkt_list)
     pcap_flow = scp.rdpcap(httppcapfile)
     sessions_all = pcap_flow.sessions()
@@ -517,10 +572,29 @@ def pkt_process(pkt):
 
     return
 
-ifaces = [str(x["name"]) for x in scpwinarch.get_windows_if_list()]  #interfaces name
-#print(ifaces)
-ifaces1 = [ifaces[6]].append(ifaces[0])  # Ether and VMnet8
-sniffthread = threading.Thread(target=scp.sniff, kwargs={"prn": pkt_process, "filter": "", "iface": ifaces[0:5]},
+# Cross-platform network interface detection
+def get_available_interfaces():
+    """Get available network interfaces for the current platform"""
+    try:
+        if platform.system() == "Windows":
+            # Windows-specific interface detection
+            ifaces = [str(x["name"]) for x in scpwinarch.get_windows_if_list()]
+        else:
+            # Unix-like systems (Linux, macOS)
+            from scapy.all import get_if_list
+            ifaces = get_if_list()
+            # Filter out loopback and inactive interfaces
+            ifaces = [iface for iface in ifaces if iface != 'lo' and not iface.startswith('docker')]
+        
+        logging.info(f"Available network interfaces: {ifaces}")
+        return ifaces[:5] if len(ifaces) > 5 else ifaces  # Limit to first 5 interfaces
+    except Exception as e:
+        logging.error(f"Error getting network interfaces: {e}")
+        return None  # Let scapy auto-detect
+
+# Get interfaces and start packet capture
+available_interfaces = get_available_interfaces()
+sniffthread = threading.Thread(target=scp.sniff, kwargs={"prn": pkt_process, "filter": "", "iface": available_interfaces},
                                daemon=True)
 sniffthread.start()
 
@@ -548,13 +622,13 @@ def load_tcp_streams(window):     #the fuction reads the latest packet capture a
     global http2streams, http2_stream_id
     global logdecodedtls
     try:
-        os.remove(f".\\temp\\tcpstreamread.pcap")
+        os.remove(os.path.join(TEMP_DIR, "tcpstreamread.pcap"))
     except:
         pass
-    scp.wrpcap(f".\\temp\\tcpstreamread.pcap", pkt_list)
+    scp.wrpcap(os.path.join(TEMP_DIR, "tcpstreamread.pcap"), pkt_list)
     global tcpstreams
     tcpstreams = []
-    tcpstreamfilename = ".\\temp\\tcpstreamread.pcap"
+    tcpstreamfilename = os.path.join(TEMP_DIR, "tcpstreamread.pcap")
     cap1 = pyshark.FileCapture(
         tcpstreamfilename,
         display_filter="tcp.seq==1 && tcp.ack==1 && tcp.len==0",
@@ -585,7 +659,7 @@ def load_tcp_streams(window):     #the fuction reads the latest packet capture a
 
 def show_http2_stream(window, streamno):         #Show the selected hhp2 stream in a new window
     global SSLLOGFILEPATH
-    tcpstreamfilename = ".\\temp\\tcpstreamread.pcap"
+    tcpstreamfilename = os.path.join(TEMP_DIR, "tcpstreamread.pcap")
     cap3 = pyshark.FileCapture(tcpstreamfilename, display_filter = f'http2.streamid eq {str(http2streamindex)}', override_prefs={'ssl.keylog_file': SSLLOGFILEPATH})
     dat = ""
     decode_hex = codecs.getdecoder("hex_codec")
@@ -627,7 +701,7 @@ def show_http2_stream(window, streamno):         #Show the selected hhp2 stream 
 
 def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if it's decodable by cross checking with ssl log file
     global SSLLOGFILEPATH
-    tcpstreamfilename = ".\\temp\\tcpstreamread.pcap"
+    tcpstreamfilename = os.path.join(TEMP_DIR, "tcpstreamread.pcap")
     streamnumber = streamno
     cap = pyshark.FileCapture(
         tcpstreamfilename,
@@ -806,7 +880,7 @@ while True:
 
     if event == '-savepcap-':
         pcapname = "savedalert"
-        scp.wrpcap(f'.\\savedpcap\\{pcapname}.pcap', pkt_list)       #pkt_list works
+        scp.wrpcap(os.path.join(SAVED_DIR, f'{pcapname}.pcap'), pkt_list)       #pkt_list works
 
     if event == '-pkts-' and len(values['-pkts-']):     # if a list item is chosen
         sus_selected = values['-pkts-']

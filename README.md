@@ -1,46 +1,87 @@
-# SCAPA
+# SCAPA - Smart Contract Attack Prevention Application
 
 ## Overview
-SCAPA (Smart Capture and Packet Analysis) is a real-time Network Intrusion Detection System (NIDS) designed to monitor and analyze network traffic for suspicious activities. It combines rule-based detection with machine learning to identify potential threats and predict attack types. SCAPA provides a user-friendly interface for capturing, analyzing, and decoding network packets, making it a powerful tool for network security professionals.
+SCAPA (Smart Contract Attack Prevention Application) is a **cross-platform** real-time Network Intrusion Detection System (NIDS) designed to monitor and analyze network traffic for suspicious activities. It combines rule-based detection with machine learning to identify potential threats and predict attack types. SCAPA provides a modern, user-friendly interface for capturing, analyzing, and decoding network packets, making it a powerful tool for network security professionals.
+
+### 🚀 **Latest Updates (v2.0):**
+- **✅ Full Cross-Platform Support**: Native support for Windows, Linux, and macOS
+- **🔧 Enhanced Installation**: Automated setup with dependency management
+- **🖥️ Improved GUI**: Updated PySimpleGUI interface with better error handling
+- **📡 Smart Network Detection**: Platform-aware network interface detection
+- **🔔 Multi-Platform Alerts**: Desktop notifications and audio alerts across all platforms
+- **🔒 Intelligent Permission Handling**: Automatic privilege escalation for packet capture
+- **⚡ Performance Optimizations**: Enhanced packet processing and memory management
 
 ### Key Features:
-- **Real-Time Packet Capture**: Continuously monitors network traffic and captures packets.
-- **Rule-Based Detection**: Uses customizable rules to flag suspicious packets.
-- **Machine Learning Integration**: Predicts attack types using a pre-trained machine learning model.
-- **HTTP Header Decoding**: Extracts and displays HTTP headers and payloads.
-- **TCP/HTTP2 Stream Analysis**: Allows users to load and analyze TCP and HTTP2 streams.
-- **Packet Saving**: Save captured packets and alerts for further analysis.
-- **User-Friendly GUI**: Built with PySimpleGUI for an intuitive and interactive experience.
+- **Real-Time Packet Capture**: Continuously monitors network traffic and captures packets
+- **Cross-Platform Compatibility**: Runs natively on Windows, Linux, and macOS
+- **Rule-Based Detection**: Uses customizable rules to flag suspicious packets
+- **Machine Learning Integration**: Predicts attack types using a pre-trained machine learning model
+- **HTTP Header Decoding**: Extracts and displays HTTP headers and payloads
+- **TCP/HTTP2 Stream Analysis**: Allows users to load and analyze TCP and HTTP2 streams
+- **Packet Saving**: Save captured packets and alerts for further analysis
+- **Modern GUI**: Built with PySimpleGUI for an intuitive and interactive experience
+- **Smart Alerts**: Desktop notifications with cross-platform audio alerts
 
 ---
 
 ## Installation
 
 ### Prerequisites
-Ensure you have the following installed on your system:
 - **Python 3.8 or higher**
-- **Pip** (Python package manager)
+- **Git** (for cloning the repository)
 
-### Steps to Install
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Sharaf25/SCAPA.git
-   cd SCAPA
-   ```
+### Quick Installation (Recommended)
 
-2. Install the required dependencies:
-   ```bash
-   pip install -r Requirements.txt
-   ```
+#### Method 1: Automated Installer
+```bash
+# Clone the repository
+git clone https://github.com/Sharaf25/SCAPA.git
+cd SCAPA
 
-3. Ensure you have the following additional tools installed:
-   - **Wireshark**: Required for PyShark to process `.pcap` files.
-   - **Scapy**: For packet manipulation and analysis.
+# Run the automated installer
+python3 install_fixed.py
+```
 
-4. Place the following files in the project directory:
-   - `model.pkl`: Pre-trained machine learning model.
-   - `fmap.pkl`: Feature mapping for the ML model.
-   - `pmap.pkl`: Protocol mapping for the ML model.
+#### Method 2: Manual Installation
+```bash
+# Clone the repository
+git clone https://github.com/Sharaf25/SCAPA.git
+cd SCAPA
+
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+# Linux/macOS:
+source venv/bin/activate
+# Windows:
+venv\Scripts\activate
+
+# Install dependencies
+pip install -r Requirements.txt
+
+# Install PySimpleGUI from official source
+pip install --upgrade --extra-index-url https://PySimpleGUI.net/install PySimpleGUI
+```
+
+### System Dependencies
+
+#### Linux (Ubuntu/Debian)
+```bash
+sudo apt-get install wireshark-common pulseaudio-utils
+sudo usermod -a -G wireshark $USER  # For network capture permissions
+```
+
+#### macOS
+```bash
+# Install Wireshark from https://www.wireshark.org/
+brew install wireshark
+```
+
+#### Windows
+- Install Wireshark from https://www.wireshark.org/
+- Ensure Wireshark is added to PATH during installation
 
 5. Run the application:
    ```bash
@@ -52,17 +93,43 @@ Ensure you have the following installed on your system:
 ## Usage
 
 ### Running SCAPA
-1. Start the application:
-   ```bash
-   python main.py
-   ```
 
-2. Use the GUI to:
-   - Start capturing packets (`STARTCAP` button).
-   - Stop capturing packets (`STOPCAP` button).
-   - Refresh detection rules (`REFRESH RULES` button).
-   - Load and analyze TCP/HTTP2 streams.
-   - Save captured packets and alerts.
+#### Option 1: Enhanced Launcher (Recommended)
+```bash
+# Run with full network capture (requires sudo on Linux/macOS)
+./scapa_launcher.sh
+```
+
+#### Option 2: Direct Execution
+```bash
+# Activate virtual environment first
+source venv/bin/activate  # Linux/macOS
+# venv\Scripts\activate   # Windows
+
+# Run SCAPA
+python main.py
+```
+
+#### Option 3: With Elevated Privileges (Full Network Capture)
+```bash
+# Linux/macOS
+sudo ./venv/bin/python main.py
+
+# Windows (Run as Administrator)
+python main.py
+```
+
+### Using the GUI Interface
+1. **Start Network Monitoring**: Click `STARTCAP` to begin packet capture
+2. **Stop Monitoring**: Click `STOPCAP` to stop packet capture
+3. **Refresh Rules**: Click `REFRESH RULES` to reload detection rules
+4. **Analyze Streams**: Load and analyze TCP/HTTP2 streams from files
+5. **Save Data**: Export captured packets and alerts for analysis
+
+### Network Permissions
+- **Linux**: Add user to wireshark group or run with sudo
+- **macOS**: May require sudo for packet capture
+- **Windows**: Run as Administrator for full network access
 
 ### Customizing Rules
 - Modify the `rules.txt` file to add or update detection rules.
@@ -77,15 +144,35 @@ Ensure you have the following installed on your system:
 
 ---
 
-## File Structure
-- `main.py`: The main application file.
-- `rules.txt`: Contains the rules for detecting suspicious packets.
-- `model.pkl`: Pre-trained machine learning model.
-- `fmap.pkl`: Feature mapping for the ML model.
-- `pmap.pkl`: Protocol mapping for the ML model.
-- `ML_Model.ipynb`: Jupyter Notebook for training and evaluating the machine learning model.
-- `savedpcap/`: Directory for saving captured packets.
-- `temp/`: Temporary files for packet and stream analysis.
+## Project Structure
+```
+SCAPA/
+├── main.py                 # Main application entry point
+├── scapa_launcher.sh       # Enhanced launcher script (Linux/macOS)
+├── install_fixed.py        # Automated installation script
+├── Requirements.txt        # Python dependencies
+├── config.ini             # Configuration settings
+├── rules.txt              # Network detection rules
+├── error_handling.py      # Enhanced error handling system
+├── network_utils.py       # Cross-platform network utilities
+├── performance_monitor.py # System performance monitoring
+├── rules_engine.py        # Advanced rules processing engine
+├── ML_Model.ipynb         # Machine learning model training notebook
+├── model.pkl              # Pre-trained ML model
+├── fmap.pkl              # Feature mapping for ML model
+├── pmap.pkl              # Protocol mapping for ML model
+├── temp/                 # Temporary analysis files
+│   └── decrypthttp2.py   # HTTP2 decryption utilities
+├── savedpcap/            # Saved packet captures
+├── logs/                 # Application logs
+└── venv/                 # Virtual environment (created during installation)
+```
+
+### Key Components
+- **Cross-Platform Core**: `main.py` with platform-aware networking
+- **Enhanced Modules**: Modular design with specialized components
+- **Automated Setup**: Smart installation with dependency resolution
+- **Security Features**: Intelligent permission handling and error recovery
 
 ---
 ## Dataset

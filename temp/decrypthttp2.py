@@ -1,6 +1,13 @@
 import pyshark
+import os
+import platform
 
-key_path = "C:\\Users\\Mostafa\\ssl1.log"
+# Cross-platform SSL key file path
+if platform.system() == "Windows":
+    key_path = os.path.expanduser("~/ssl_keys.log")
+else:
+    key_path = os.path.expanduser("~/ssl_keys.log")
+
 pcap_file = 'tcpstreamread.pcap'
 
 

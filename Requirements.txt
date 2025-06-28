@@ -1,6 +1,37 @@
-scapy==2.4.5
-PySimpleGUI==4.60.4
-pyshark==0.4.5
-plyer==2.1.0
-numpy==1.24.2
-scikit-learn==1.2.2
+# Core networking and packet analysis
+scapy>=2.4.5
+pyshark>=0.4.5
+
+# GUI framework - Using latest PySimpleGUI 5.x
+PySimpleGUI>=5.0.0
+
+# Machine learning and data processing
+scikit-learn>=1.2.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# System monitoring and notifications
+psutil>=5.9.0
+plyer>=2.1.0
+
+# Configuration management
+configparser>=5.0.0
+
+# Enhanced logging and utilities
+colorlog>=6.7.0
+tqdm>=4.65.0
+
+# Optional: For better JSON handling
+orjson>=3.8.0
+
+# Development and testing (optional)
+pytest>=7.4.0
+black>=23.0.0
+flake8>=6.0.0
+
+# Platform-specific requirements
+# Windows audio alerts (Windows only)
+pydub>=0.25.1; sys_platform == "win32"
+
+# Cross-platform audio (alternative)
+pygame>=2.1.0
