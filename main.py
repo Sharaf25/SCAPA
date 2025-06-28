@@ -27,10 +27,13 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 #rules ---->        instruction  protocol  sourceIP  sourcePort  direction  destinationIP  destinationPort  message
 
+
 def alert_user(message):
     """Send desktop notification with sound"""
     # Play alert sound
     winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
+
+    # Use PySimpleGUI's non-blocking popup instead of tkinter
     sg.popup_non_blocking("Intrusion Detection Alert",
                           message,
                           auto_close=True,
@@ -267,8 +270,9 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
             src = pkt['IP'].src
             dest = pkt['IP'].dst
             proto = proto_name_by_num(pkt['IP'].proto).lower()   #protocol number to protocol name
-            sport = pkt['IP'].sport
-            dport = pkt['IP'].dport
+            # Get sport and dport from TCP/UDP layer instead of IP
+            sport = pkt[TCP].sport if TCP in pkt else (pkt[UDP].sport if UDP in pkt else None)
+            dport = pkt[TCP].dport if TCP in pkt else (pkt[UDP].dport if UDP in pkt else None)
 
             for i in range(len(alertprotocols)):
                 flagpacket = False
@@ -517,7 +521,10 @@ def pkt_process(pkt):
 
 ifaces = [str(x["name"]) for x in scpwinarch.get_windows_if_list()]  #interfaces name
 #print(ifaces)
-ifaces1 = [ifaces[6]].append(ifaces[0])  # Ether and VMnet8
+# Fix the interfaces list creation
+ifaces1 = [ifaces[0]]  # Start with the first interface
+if len(ifaces) > 6:
+    ifaces1.append(ifaces[6])  # Add the 7th interface if it exists
 sniffthread = threading.Thread(target=scp.sniff, kwargs={"prn": pkt_process, "filter": "", "iface": ifaces[0:5]},
                                daemon=True)
 sniffthread.start()
@@ -543,7 +550,7 @@ def show_http2_stream_openwin(tcpstreamtext):     #this function shows http2 inf
     window.close()
 
 def load_tcp_streams(window):     #the fuction reads the latest packet capture after saving it in the temp folder
-    global http2streams, http2_stream_id
+    global http2streams
     global logdecodedtls
     try:
         os.remove(f".\\temp\\tcpstreamread.pcap")
@@ -560,7 +567,6 @@ def load_tcp_streams(window):     #the fuction reads the latest packet capture a
     number_of_streams = 0
     for pkt in cap1:
         if pkt.highest_layer.lower() == "tcp" or pkt.highest_layer.lower() == "tls":
-            #print(pkt.tcp.stream)
             if int(pkt.tcp.stream) > number_of_streams:
                 number_of_streams = int(pkt.tcp.stream) + 1
     for i in range(0, number_of_streams):
@@ -568,59 +574,50 @@ def load_tcp_streams(window):     #the fuction reads the latest packet capture a
     window["-tcpstreams-"].update(values=[])
     window["-tcpstreams-"].update(values=tcpstreams)
 
-    if logdecodedtls == True:
+    # --- FIXED HTTP2 STREAM EXTRACTION ---
+    if logdecodedtls:
         http2streams = []
-        cap2 = pyshark.FileCapture(tcpstreamfilename, display_filter="http2.streamid",keep_packets=True)
+        cap2 = pyshark.FileCapture(tcpstreamfilename, display_filter="http2", keep_packets=True)
+        http2stream_info = []  # Collect HTTP2 stream information
         for pkt in cap2:
-            field_names = pkt.http2._all_fields
-            for field_name in field_names:
-                http2_stream_id = {val for key, val in field_names.items() if key == 'http2.streamid'}
-                http2_stream_id = "".join(http2_stream_id)
-            if http2_stream_id not in http2streams:
-                http2streams.append(http2_stream_id)
+            if hasattr(pkt, 'http2') and hasattr(pkt.http2, 'streamid'):
+                stream_id = pkt.http2.streamid
+                http2stream_info.append(f"Stream ID: {stream_id}")  # Add stream ID to info list
+                if stream_id not in http2streams:
+                    http2streams.append(stream_id)
         window['-http2streams-'].update(values=http2streams)
+        # Store the info for later display (fix: always ensure dict)
+        if not hasattr(window, 'metadata') or not isinstance(window.metadata, dict):
+            window.metadata = {}
+        window.metadata['http2stream_info'] = http2stream_info
         pass
 
-def show_http2_stream(window, streamno):         #Show the selected hhp2 stream in a new window
+def show_http2_stream(window, streamno):         #Show the selected http2 stream in a new window
     global SSLLOGFILEPATH
     tcpstreamfilename = ".\\temp\\tcpstreamread.pcap"
-    cap3 = pyshark.FileCapture(tcpstreamfilename, display_filter = f'http2.streamid eq {str(http2streamindex)}', override_prefs={'ssl.keylog_file': SSLLOGFILEPATH})
+    # --- FIXED: use streamno, not http2streamindex ---
+    cap3 = pyshark.FileCapture(
+        tcpstreamfilename,
+        display_filter = f'http2.streamid == {streamno}',
+        override_prefs={'ssl.keylog_file': SSLLOGFILEPATH})
     dat = ""
     decode_hex = codecs.getdecoder("hex_codec")
     http_payload = bytes()
     for pkt in cap3:
         try:
-            payload = pkt["TCP"].payload
-            http_payload += scp.raw(payload)
+            if hasattr(pkt, "TCP") and hasattr(pkt["TCP"], "payload"):
+                payload = pkt["TCP"].payload
+                http_payload += scp.raw(payload)
         except:
             pass
-
-        print(pkt.http2.stream)
-        if ("DATA" not in pkt.http2.stream):
-            http2headerdat = ''
-            rawvallengthpassed = False
-            print(pkt.http2._all_fields.items())
-            for field, val in pkt.http2._all_fields.items():
-                if rawvallengthpassed == False:
-                    if field == 'http2.header.name.length':
-                        rawvallengthpassed = True
-                else:
-                    http2headerdat += str(field.split(".")[-1]) + " : " + str(val) + " \n"
-                    print(http2headerdat)
-            dat += "\n" + http2headerdat
-
+        # Optionally, collect HTTP2 header info here if needed
     if len(http_payload):
         http_headers = get_http_headers(http_payload)
-
         if http_headers is not None:
             object_found, object_type = extract_object(http_headers, http_payload)
-
-            dat += object_type + "\n" + object_found + "\n"
-
-    print(dat)
-    formatteddat = dat
-    print(formatteddat)
-    show_http2_stream_openwin(formatteddat)
+            # Ensure bytes are converted to string for display
+            dat += str(object_type) + "\n" + str(object_found) + "\n"
+    show_http2_stream_openwin(dat)
     pass
 
 def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if it's decodable by cross checking with ssl log file
@@ -712,8 +709,7 @@ while True:
                     # Fetch the corresponding packet
                     packet = pkt_list[selected_index]  # Get the ML-related packet
 
-                    # Decode packet details using Scapy's show() and raw payload
-                    packet_headers = packet.show(dump=True)  # Get detailed packet headers
+                    # Decode packet details using Scapy's show(dump=True)  # Get detailed packet headers
 
                     # Update the decoding section of the GUI dynamically
                     window["-payloaddecoded-"].update(value=f"{packet_headers}\n")
