@@ -92,3 +92,78 @@ def validate_interface(interface_name: str) -> bool:
     """
     available_interfaces = get_network_interfaces()
     return any(iface["name"] == interface_name for iface in available_interfaces)
+
+def get_available_interfaces() -> List[str]:
+    """
+    Get list of available network interface names (simplified version for SCAPA)
+    
+    Returns:
+        List of interface names ready for use with scapy
+    """
+    interfaces = get_network_interfaces()
+    
+    # Filter out common problematic interfaces
+    filtered_names = []
+    for iface in interfaces:
+        name = iface["name"]
+        
+        # Skip loopback and virtual interfaces
+        if name in ["lo", "lo0"]:
+            continue
+        if name.startswith(("docker", "veth", "br-")):
+            continue
+        if "Virtual" in iface.get("description", ""):
+            continue
+            
+        filtered_names.append(name)
+    
+    # Limit to reasonable number of interfaces
+    return filtered_names[:5] if len(filtered_names) > 5 else filtered_names
+
+def get_interface_statistics(interface_name: str) -> Dict[str, int]:
+    """
+    Get basic statistics for a network interface
+    
+    Args:
+        interface_name: Name of the interface
+        
+    Returns:
+        Dictionary with interface statistics
+    """
+    try:
+        import psutil
+        stats = psutil.net_io_counters(pernic=True)
+        
+        if interface_name in stats:
+            iface_stats = stats[interface_name]
+            return {
+                "bytes_sent": iface_stats.bytes_sent,
+                "bytes_recv": iface_stats.bytes_recv,
+                "packets_sent": iface_stats.packets_sent,
+                "packets_recv": iface_stats.packets_recv,
+                "errin": iface_stats.errin,
+                "errout": iface_stats.errout,
+                "dropin": iface_stats.dropin,
+                "dropout": iface_stats.dropout
+            }
+    except Exception as e:
+        logging.error(f"Error getting interface statistics: {e}")
+    
+    return {}
+
+def is_interface_active(interface_name: str) -> bool:
+    """
+    Check if a network interface is active
+    
+    Args:
+        interface_name: Name of the interface to check
+        
+    Returns:
+        True if interface is active
+    """
+    try:
+        stats = get_interface_statistics(interface_name)
+        # Consider interface active if it has sent or received packets
+        return stats.get("packets_sent", 0) > 0 or stats.get("packets_recv", 0) > 0
+    except Exception:
+        return False

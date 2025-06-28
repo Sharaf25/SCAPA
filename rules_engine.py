@@ -171,6 +171,66 @@ class RulesEngine:
         
         return False, ""
     
+    def evaluate_packet(self, packet) -> tuple:
+        """
+        Evaluate a packet against all loaded rules
+        Returns (True, message) if packet matches any rule, (False, "") otherwise
+        """
+        try:
+            # Extract packet information
+            if not hasattr(packet, 'payload') or 'IP' not in packet:
+                return False, ""
+            
+            src_ip = packet['IP'].src
+            dst_ip = packet['IP'].dst
+            protocol = packet['IP'].proto
+            
+            # Get protocol name
+            protocol_name = self._get_protocol_name(protocol)
+            
+            # Extract ports if available
+            src_port = 0
+            dst_port = 0
+            
+            if hasattr(packet, 'sport'):
+                src_port = packet.sport
+            if hasattr(packet, 'dport'):
+                dst_port = packet.dport
+            
+            # Create packet info dictionary
+            packet_info = {
+                "src_ip": src_ip,
+                "dst_ip": dst_ip,
+                "protocol": protocol_name,
+                "src_port": src_port,
+                "dst_port": dst_port
+            }
+            
+            # Check against all rules
+            for rule in self.rules:
+                if not rule.enabled:
+                    continue
+                
+                if self._match_rule(rule, packet_info):
+                    message = getattr(rule, 'message', f"ALERT: {rule.action} rule triggered")
+                    logging.info(f"Packet matched rule: {message}")
+                    return True, message
+            
+            return False, ""
+            
+        except Exception as e:
+            logging.error(f"Error evaluating packet: {e}")
+            return False, ""
+    
+    def _get_protocol_name(self, proto_num: int) -> str:
+        """Convert protocol number to name"""
+        protocol_map = {
+            1: "icmp",
+            6: "tcp", 
+            17: "udp"
+        }
+        return protocol_map.get(proto_num, str(proto_num))
+    
     def _match_rule(self, rule: Rule, packet_info: Dict) -> bool:
         """Check if packet matches a specific rule"""
         # Check protocol

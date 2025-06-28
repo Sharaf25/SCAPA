@@ -46,7 +46,28 @@ echo ""
 # Launch SCAPA with warning suppression
 echo "📊 Loading ML models and starting GUI interface..."
 export PYTHONWARNINGS="ignore"
-$PYTHON_CMD main.py 2>/dev/null &
+
+# Ensure temp and logs directories exist with proper permissions
+echo "🔧 Setting up directories and permissions..."
+mkdir -p temp logs savedpcap 2>/dev/null || true
+
+# Fix ownership and permissions for all SCAPA directories
+if [ "$EUID" -eq 0 ]; then
+    # Running as root - fix ownership back to original user
+    if [ -n "$SUDO_USER" ]; then
+        echo "   Fixing ownership for user: $SUDO_USER"
+        chown -R $SUDO_USER:$SUDO_USER temp/ logs/ savedpcap/ 2>/dev/null || true
+        chown $SUDO_USER:$SUDO_USER *.pcap *.pkl *.txt *.ini 2>/dev/null || true
+    fi
+fi
+
+# Set proper permissions (readable by all, writable by owner)
+chmod -R 755 temp/ logs/ savedpcap/ 2>/dev/null || true
+chmod 644 *.pcap *.pkl *.txt *.ini 2>/dev/null || true
+
+echo "   ✅ Directory permissions configured"
+
+$PYTHON_CMD main.py 2>&1 | grep -v "UserWarning\|sklearn.*version\|deprecated" &
 SCAPA_PID=$!
 
 echo "✅ SCAPA is starting (PID: $SCAPA_PID)"

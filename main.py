@@ -1,37 +1,74 @@
-import scapy.all as scp
+#!/usr/bin/env python3
+"""
+SCAPA - Smart Capture and Packet Analysis
+Network Security Tool with ML-based Threat Detection
+
+Version: 2.0 Production
+Author: SCAPA Development Team
+License: MIT
+"""
+
+# Standard library imports
 import codecs
-import PySimpleGUI as sg
-import os
-import threading
-import sys
-import pyshark
-import socket
-# Platform-specific imports
-import platform
-if platform.system() == "Windows":
-    import scapy.arch.windows as scpwinarch
-from scapy.all import sniff, IP, TCP, UDP, ICMP, Raw
-import time
-from collections import defaultdict
+import glob
+import ipaddress
 import json
 import logging
-import re
-import ipaddress
-import subprocess
-import pprint
-import glob
+import os
 import pickle
-import numpy
-# Cross-platform alert handling
-try:
-    import winsound
-except ImportError:
-    winsound = None
-from plyer import notification
+import platform
+import pwd
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
+from collections import defaultdict
 from tkinter import Tk, messagebox
+
+# Third-party imports
+import numpy
+import PySimpleGUI as sg
+import pyshark
+import scapy.all as scp
+from plyer import notification
+from scapy.all import sniff, IP, TCP, UDP, ICMP, Raw
 from sklearn.ensemble import RandomForestClassifier
 
+# Platform-specific imports
+if platform.system() == "Windows":
+    import scapy.arch.windows as scpwinarch
+    try:
+        import winsound
+    except ImportError:
+        winsound = None
+else:
+    winsound = None
+
+# Enhanced SCAPA modules
+try:
+    from performance_monitor import monitor as performance_monitor
+    from error_handling import handle_error, setup_logging, SCAPAError
+    from network_utils import get_available_interfaces, validate_interface
+    from rules_engine import RulesEngine
+    ENHANCEMENTS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Some enhancements not available: {e}")
+    ENHANCEMENTS_AVAILABLE = False
+    # Fallback implementations
+    performance_monitor = None
+    def handle_error(func): return func
+    def setup_logging(): pass
+    class SCAPAError(Exception): pass
+
+# Configure logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+
+# SCAPA imports and setup
+
+# PyShark configuration is now handled automatically via tshark-compatible pcap copying
+logging.info("PyShark configuration handled via tshark-compatible file copying")
 
 #rules ---->        instruction  protocol  sourceIP  sourcePort  direction  destinationIP  destinationPort  message
 
@@ -78,16 +115,86 @@ def alert_user(message):
         print(f"\n*** SECURITY ALERT ***\n{message}\n")
 
 def readrules():
+    """Read and validate rules from rules.txt with input sanitization"""
     rulefile = "rules.txt"
     ruleslist = []
-    with open(rulefile, "r") as rf:
-        ruleslist = rf.readlines()
+    
+    # Validate file exists and is readable
+    if not os.path.exists(rulefile):
+        logging.warning(f"Rules file {rulefile} not found")
+        return []
+    
+    try:
+        with open(rulefile, "r", encoding='utf-8') as rf:
+            ruleslist = rf.readlines()
+    except Exception as e:
+        logging.error(f"Error reading rules file: {e}")
+        return []
+    
     rules_list = []
-    for line in ruleslist:
+    for line_num, line in enumerate(ruleslist, 1):
+        # Input sanitization
+        line = line.strip()
+        
+        # Skip empty lines and comments
+        if not line or line.startswith('#'):
+            continue
+            
+        # Basic validation for rule format
         if line.startswith("alert"):
-            rules_list.append(line)
-    #print(rules_list)
+            # Sanitize the rule line
+            sanitized_line = sanitize_rule_input(line)
+            if sanitized_line:
+                rules_list.append(sanitized_line)
+            else:
+                logging.warning(f"Invalid rule format at line {line_num}: {line}")
+    
+    logging.info(f"Loaded {len(rules_list)} valid rules")
     return rules_list
+
+def sanitize_rule_input(rule_line):
+    """Sanitize rule input to prevent injection attacks"""
+    # Remove potentially dangerous characters
+    dangerous_chars = [';', '&', '|', '`', '$', '(', ')', '{', '}']
+    for char in dangerous_chars:
+        if char in rule_line:
+            logging.warning(f"Potentially dangerous character '{char}' found in rule")
+            return None
+    
+    # Basic format validation: alert protocol src_ip src_port -> dst_ip dst_port message
+    parts = rule_line.split()
+    if len(parts) < 7:
+        return None
+    
+    if parts[0] != "alert":
+        return None
+    
+    if parts[4] != "->":
+        return None
+    
+    # Validate IP addresses (basic check)
+    src_ip = parts[2]
+    dst_ip = parts[5]
+    
+    # Allow 'any' or basic IP validation
+    if src_ip != "any" and not is_valid_ip_pattern(src_ip):
+        return None
+    
+    if dst_ip != "any" and not is_valid_ip_pattern(dst_ip):
+        return None
+    
+    return rule_line
+
+def is_valid_ip_pattern(ip_str):
+    """Basic IP pattern validation"""
+    # Allow CIDR notation and wildcards
+    if ip_str in ["any", "*"]:
+        return True
+    
+    # Basic IPv4 pattern check
+    import re
+    ipv4_pattern = r'^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$'
+    return bool(re.match(ipv4_pattern, ip_str))
 
 alertprotocols = []
 alertdestips = []
@@ -166,6 +273,101 @@ def get_cross_platform_paths():
     
     return ssl_log_path, temp_dir, saved_dir
 
+def create_pcap_file_safely(filepath: str, packets: list) -> bool:
+    """Safely create a pcap file with proper permissions for tshark access"""
+    try:
+        # Ensure directory exists with proper permissions
+        dir_path = os.path.dirname(filepath)
+        if dir_path:
+            os.makedirs(dir_path, mode=0o755, exist_ok=True)
+            
+            # Fix directory permissions if running as root
+            if ENHANCEMENTS_AVAILABLE:
+                from error_handling import fix_file_permissions
+                fix_file_permissions(dir_path, mode=0o755)
+        
+        # Get the original user if running as sudo
+        original_user = os.environ.get('SUDO_USER')
+        
+        # Write the pcap file
+        scp.wrpcap(filepath, packets)
+        
+        # Set file permissions to be readable by all (required for tshark)
+        os.chmod(filepath, 0o644)
+         # If we're running as root but original user exists, fix ownership
+        if original_user and os.geteuid() == 0:
+            try:
+                user_info = pwd.getpwnam(original_user)
+                os.chown(filepath, user_info.pw_uid, user_info.pw_gid)
+                logging.debug(f"Fixed ownership of {filepath} to {original_user}")
+            except (KeyError, OSError) as e:
+                logging.debug(f"Could not fix ownership: {e}")
+        
+        # Verify file was created and is accessible
+        if not os.path.exists(filepath):
+            logging.error(f"Failed to create pcap file: {filepath}")
+            return False
+        
+        if not os.access(filepath, os.R_OK):
+            logging.error(f"Pcap file is not readable: {filepath}")
+            if ENHANCEMENTS_AVAILABLE:
+                from error_handling import handle_permission_error, PermissionError
+                handle_permission_error(
+                    PermissionError("File not readable"), 
+                    filepath, 
+                    "Ensure tshark has read access to temp directory"
+                )
+            return False
+        
+        file_size = os.path.getsize(filepath)
+        if file_size == 0:
+            logging.warning(f"Pcap file is empty: {filepath}")
+            return False
+        
+        logging.info(f"Pcap file created successfully: {filepath} ({file_size} bytes)")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error creating pcap file {filepath}: {e}")
+        if ENHANCEMENTS_AVAILABLE:
+            from error_handling import handle_error, handle_permission_error
+            if "permission" in str(e).lower() or "access" in str(e).lower():
+                handle_permission_error(e, filepath, "Try running SCAPA with sudo for full functionality")
+            else:
+                handle_error(e, f"pcap file creation: {filepath}")
+        return False
+
+def create_secure_pcap_file(filename, packet_list):
+    """Create a pcap file with proper permissions that tshark can read"""
+    try:
+        # Get the original user if running as sudo
+        original_user = os.environ.get('SUDO_USER')
+        
+        # Create the file
+        scp.wrpcap(filename, packet_list)
+        
+        # Set permissions to be readable by all
+        os.chmod(filename, 0o644)
+         # If we're running as root but original user exists, fix ownership
+        if original_user and os.geteuid() == 0:
+            try:
+                user_info = pwd.getpwnam(original_user)
+                os.chown(filename, user_info.pw_uid, user_info.pw_gid)
+                logging.debug(f"Fixed ownership of {filename} to {original_user}")
+            except (KeyError, OSError) as e:
+                logging.debug(f"Could not fix ownership: {e}")
+        
+        # Verify the file is readable
+        if not os.access(filename, os.R_OK):
+            raise PermissionError(f"Created file {filename} is not readable")
+        
+        logging.info(f"Pcap file created successfully: {filename} ({os.path.getsize(filename)} bytes)")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Failed to create secure pcap file {filename}: {e}")
+        return False
+
 # Get platform-specific paths
 SSLLOGFILEPATH, TEMP_DIR, SAVED_DIR = get_cross_platform_paths()
 
@@ -182,7 +384,7 @@ logdecodedtls = True
 httpobjectindexes = []
 httpobjectactuals = []
 httpobjecttypes = []
-updatepktlist = False
+updatepktlist = True  # Start capturing packets immediately
 
 
 #--------------------------------------------------GUI-------------------------------------
@@ -194,6 +396,7 @@ layout = [[sg.Button('STARTCAP', key="-startcap-"),
            sg.Button('REFRESH RULES', key='-refreshrules-'),
            sg.Button('LOAD TCP/HTTP2 STREAMS', key='-showtcpstreamsbtn-'),
            sg.Button('LOAD HTTP STREAMS', key='-showhttpstreamsbtn-'),
+           sg.Button('PERFORMANCE', key='-performance-'),
            ],
           [sg.Text("ALERT PACKETS", font=('Arial Bold', 14), size=(65, None), justification="left"),
            sg.Text("ALL PACKETS", font=('Arial Bold', 14), size=(60, None), justification="left")
@@ -213,7 +416,35 @@ layout = [[sg.Button('STARTCAP', key="-startcap-"),
            sg.Listbox(key='-httpobjects-', size=(25, 20), values=httpobjectindexes, enable_events=True),
            sg.Listbox(key='-ML-', size=(33, 20), values=MLresult, enable_events=True)
            ],
-          [sg.Button('Exit')]]
+          [sg.Text("Performance Monitor:", font=('Arial Bold', 10)), 
+           sg.Text("CPU: 0%", key='-cpu-', font=('Arial', 10)),
+           sg.Text("Memory: 0MB", key='-memory-', font=('Arial', 10)),
+           sg.Text("Packets: 0", key='-packets-', font=('Arial', 10)),
+           sg.Text("Status: READY", key='-status-', font=('Arial', 10), text_color='orange'),
+           sg.Push(),
+           sg.Button('Exit')]]
+
+# Initialize enhanced SCAPA modules
+if ENHANCEMENTS_AVAILABLE:
+    # Setup enhanced logging
+    setup_logging()
+    logging.info("SCAPA starting with enhanced modules")
+    
+    # Start performance monitoring
+    if performance_monitor:
+        performance_monitor.start_monitoring()
+        logging.info("Performance monitoring started")
+    
+    # Initialize rules engine
+    try:
+        rules_engine = RulesEngine()
+        logging.info("Enhanced rules engine initialized")
+    except Exception as e:
+        logging.warning(f"Failed to initialize enhanced rules engine: {e}")
+        rules_engine = None
+else:
+    logging.warning("Running SCAPA in basic mode (enhancements not available)")
+    rules_engine = None
 
 window = sg.Window('SCAPA', layout, size=(1600,800), resizable=True)
 
@@ -273,7 +504,18 @@ def read_http():   #This function creats a temporary pcap file containing captur
     except:
         pass
     httppcapfile = os.path.join(TEMP_DIR, "httpstreamread.pcap")
-    scp.wrpcap(httppcapfile, pkt_list)
+    
+    # Create HTTP pcap file safely with enhanced permission handling
+    if not create_pcap_file_safely(httppcapfile, pkt_list):
+        if ENHANCEMENTS_AVAILABLE:
+            from error_handling import handle_permission_error, FileCreationError
+            handle_permission_error(
+                FileCreationError("HTTP pcap creation failed"), 
+                httppcapfile, 
+                "Check temp directory permissions and try running with sudo"
+            )
+        logging.error("Failed to create HTTP stream pcap file")
+        return [], [], []
     pcap_flow = scp.rdpcap(httppcapfile)
     sessions_all = pcap_flow.sessions()
 
@@ -319,6 +561,16 @@ def check_rules_warning(pkt):      #function to check if the packet should be fl
     global updatepktlist
     global proto
     global Alert_Lock
+    
+    # Use enhanced rules engine if available
+    if ENHANCEMENTS_AVAILABLE and rules_engine:
+        try:
+            return rules_engine.evaluate_packet(pkt)
+        except Exception as e:
+            logging.error(f"Enhanced rules engine error: {e}")
+            # Fall back to original implementation
+    
+    # Original rules checking logic (fallback)
     if 'IP' in pkt:
         try:
             src = pkt['IP'].src
@@ -419,12 +671,103 @@ diff_srv_rate = 0
 srv_diff_host_rate = 0
 duration = 0
 
-with open ('model.pkl','rb') as file:
-    model = pickle.load(file)
-with open ('fmap.pkl','rb') as file:
-    fmap = pickle.load(file)
-with open ('pmap.pkl','rb') as file:
-    pmap = pickle.load(file)
+# Safe model loading with validation
+def load_ml_models():
+    """Safely load ML models with validation"""
+    required_files = ['model.pkl', 'fmap.pkl', 'pmap.pkl']
+    
+    for file_path in required_files:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Required ML model file not found: {file_path}")
+    
+    try:
+        # Load with size limits for security
+        with open('model.pkl', 'rb') as file:
+            # Limit file size to prevent memory attacks
+            file_size = os.path.getsize('model.pkl')
+            if file_size > 100 * 1024 * 1024:  # 100MB limit
+                raise ValueError("Model file too large, possible security risk")
+            model = pickle.load(file)
+            
+        with open('fmap.pkl', 'rb') as file:
+            file_size = os.path.getsize('fmap.pkl')
+            if file_size > 10 * 1024 * 1024:  # 10MB limit
+                raise ValueError("Feature map file too large, possible security risk")
+            fmap = pickle.load(file)
+            
+        with open('pmap.pkl', 'rb') as file:
+            file_size = os.path.getsize('pmap.pkl')
+            if file_size > 10 * 1024 * 1024:  # 10MB limit
+                raise ValueError("Protocol map file too large, possible security risk")
+            pmap = pickle.load(file)
+            
+        logging.info("ML models loaded successfully")
+        return model, fmap, pmap
+        
+    except Exception as e:
+        logging.error(f"Failed to load ML models: {e}")
+        raise
+
+# Load models safely
+try:
+    model, fmap, pmap = load_ml_models()
+except Exception as e:
+    logging.error(f"ML models unavailable: {e}")
+    model, fmap, pmap = None, None, None
+
+# Performance optimization: batch ML predictions
+ml_batch_queue = []
+ml_batch_size = 10  # Process ML in batches of 10 packets
+ml_last_process_time = time.time()
+
+def should_analyze_with_ml(pkt):
+    """Filter packets that need ML analysis"""
+    # Only analyze TCP/UDP/ICMP packets
+    if not (pkt.haslayer(TCP) or pkt.haslayer(UDP) or pkt.haslayer(ICMP)):
+        return False
+    
+    # Skip local traffic
+    if pkt.haslayer(IP):
+        src_ip = pkt[IP].src
+        dst_ip = pkt[IP].dst
+        
+        # Skip localhost traffic
+        if src_ip.startswith('127.') or dst_ip.startswith('127.'):
+            return False
+        
+        # Skip private network internal traffic (optional)
+        # if src_ip.startswith('192.168.') and dst_ip.startswith('192.168.'):
+        #     return False
+    
+    return True
+
+def process_ml_batch():
+    """Process accumulated ML predictions in batch"""
+    global ml_batch_queue, MLresult
+    
+    if not ml_batch_queue or not model:
+        return
+    
+    try:
+        # Process all packets in batch
+        batch_data = []
+        for pkt_data in ml_batch_queue:
+            batch_data.append(pkt_data['features'])
+        
+        # Batch prediction
+        predictions = model.predict(numpy.array(batch_data))
+        
+        # Update results
+        for i, prediction in enumerate(predictions):
+            clean_prediction = str(prediction).strip("[]'\"")
+            MLresult.append(f"{len(MLresult)} [{clean_prediction}]")
+        
+        # Clear the batch queue
+        ml_batch_queue.clear()
+        
+    except Exception as e:
+        logging.error(f"ML batch processing error: {e}")
+        ml_batch_queue.clear()
 
 
 def pkt_process(pkt):
@@ -436,18 +779,34 @@ def pkt_process(pkt):
     global pkt_list
     global MLresult
 
+    # Always log packet arrival for debugging
+    logging.debug(f"Packet received: {pkt.summary()} - updatepktlist={updatepktlist}")
+
     if not updatepktlist:
         return
+
+    # Performance monitoring - increment packet count
+    if performance_monitor:
+        performance_monitor.increment_packet_count()
+
+    # Debug logging for packet capture
+    logging.info(f"Processing packet {len(pktsummarylist) + 1}: {pkt.summary()}")
 
     pkt_summary = pkt.summary()
     pktsummarylist.append(f"{len(pktsummarylist)} " + pkt_summary)
     pkt_list.append(pkt)
 
-    sus_pkt, sus_msg = check_rules_warning(pkt)
-    if sus_pkt:
-        suspiciouspackets.append(f"{len(suspiciouspackets)} {len(pktsummarylist) - 1}" + pkt_summary + f" MSG: {sus_msg}")
-        suspacketactual.append(pkt)
-
+    # Enhanced rule checking with error handling
+    try:
+        sus_pkt, sus_msg = check_rules_warning(pkt)
+        if sus_pkt:
+            suspiciouspackets.append(f"{len(suspiciouspackets)} {len(pktsummarylist) - 1}" + pkt_summary + f" MSG: {sus_msg}")
+            suspacketactual.append(pkt)
+    except Exception as e:
+        if ENHANCEMENTS_AVAILABLE:
+            logging.error(f"Error in rule checking: {e}")
+        else:
+            print(f"Rule checking error: {e}")
 
     global duration, service, start_time, src_bytes, dst_bytes, flag, land, urgent, wrong_fragment, num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate, diff_srv_rate, srv_diff_host_rate
     #global protocol_type
@@ -553,29 +912,55 @@ def pkt_process(pkt):
 
     #print(proto)
 
-    Pkt_Info_List = numpy.array([[duration, proto, flag, src_bytes, dst_bytes, land, wrong_fragment, urgent,
-                                  num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate,
-                                  diff_srv_rate, round(srv_diff_host_rate,2)]])
-    #print(Pkt_Info_List)
-    if flag not in fmap.keys():
-        Pkt_Info_List[0][2] = 0
-    else:
-        Pkt_Info_List[0][2] = fmap[Pkt_Info_List[0][2]]
+    # Optimized ML processing - only analyze relevant packets
+    if should_analyze_with_ml(pkt) and model and fmap and pmap:
+        # Prepare packet features
+        Pkt_Info_List = numpy.array([[duration, proto, flag, src_bytes, dst_bytes, land, wrong_fragment, urgent,
+                                      num_outbound_cmds, count, srv_count, serror_rate, rerror_rate, same_srv_rate,
+                                      diff_srv_rate, round(srv_diff_host_rate,2)]])
+        
+        # Map features using dictionaries
+        if flag not in fmap.keys():
+            Pkt_Info_List[0][2] = 0
+        else:
+            Pkt_Info_List[0][2] = fmap[Pkt_Info_List[0][2]]
 
-    Pkt_Info_List[0][1] = pmap[Pkt_Info_List[0][1]]
-
-    model_predict = model.predict(Pkt_Info_List)
-    clean_prediction = str(model_predict).strip("[]'\"")          #to remove special characters from the output
-    MLresult.append(f"{len(MLresult)} " + f"[{clean_prediction}]")        # add the packet number
-
-    #MLresult.append(model_predict)
+        Pkt_Info_List[0][1] = pmap[Pkt_Info_List[0][1]]
+        
+        # Add to batch queue instead of immediate prediction
+        ml_batch_queue.append({
+            'features': Pkt_Info_List[0],
+            'packet_index': len(pktsummarylist) - 1
+        })
+        
+        # Process batch if conditions are met
+        global ml_last_process_time
+        current_time = time.time()
+        if (len(ml_batch_queue) >= ml_batch_size or 
+            current_time - ml_last_process_time > 2.0):  # Process every 2 seconds max
+            process_ml_batch()
+            ml_last_process_time = current_time
 
     return
 
-# Cross-platform network interface detection
-def get_available_interfaces():
+# Enhanced cross-platform network interface detection
+def get_network_interfaces():
     """Get available network interfaces for the current platform"""
     try:
+        if ENHANCEMENTS_AVAILABLE:
+            # Use enhanced network utilities
+            interfaces = get_available_interfaces()
+            if interfaces:
+                # Filter interfaces for scapy compatibility
+                scapy_interfaces = []
+                for iface in interfaces:
+                    # Remove parenthetical descriptions for scapy
+                    clean_iface = iface.split(' (')[0] if ' (' in iface else iface
+                    if clean_iface not in ['any', 'bluetooth-monitor', 'nflog', 'nfqueue', 'dbus-system', 'dbus-session']:
+                        scapy_interfaces.append(clean_iface)
+                return scapy_interfaces[:3]  # Limit to 3 active interfaces
+        
+        # Fallback to original implementation
         if platform.system() == "Windows":
             # Windows-specific interface detection
             ifaces = [str(x["name"]) for x in scpwinarch.get_windows_if_list()]
@@ -583,20 +968,82 @@ def get_available_interfaces():
             # Unix-like systems (Linux, macOS)
             from scapy.all import get_if_list
             ifaces = get_if_list()
-            # Filter out loopback and inactive interfaces
-            ifaces = [iface for iface in ifaces if iface != 'lo' and not iface.startswith('docker')]
+            # Filter out loopback and special interfaces
+            ifaces = [iface for iface in ifaces if iface not in ['lo', 'any'] and not iface.startswith('docker')]
         
-        logging.info(f"Available network interfaces: {ifaces}")
-        return ifaces[:5] if len(ifaces) > 5 else ifaces  # Limit to first 5 interfaces
+        logging.info(f"Available network interfaces for packet capture: {ifaces}")
+        return ifaces[:3] if len(ifaces) > 3 else ifaces  # Limit to first 3 interfaces
     except Exception as e:
         logging.error(f"Error getting network interfaces: {e}")
-        return None  # Let scapy auto-detect
+        # Fallback to None to let scapy auto-detect
+        return None
 
 # Get interfaces and start packet capture
-available_interfaces = get_available_interfaces()
-sniffthread = threading.Thread(target=scp.sniff, kwargs={"prn": pkt_process, "filter": "", "iface": available_interfaces},
-                               daemon=True)
-sniffthread.start()
+available_interfaces = get_network_interfaces()
+logging.info(f"Initializing packet capture on interfaces: {available_interfaces}")
+
+# Check if we have permission for packet capture
+try:
+    import os
+    if os.geteuid() != 0 and platform.system() != "Windows":
+        logging.warning("Not running as root - packet capture may be limited")
+        logging.info("For full packet capture, run: sudo python main.py")
+except:
+    pass
+
+# Start packet sniffer thread
+try:
+    # Choose the best interface for packet capture
+    capture_interface = None
+    if available_interfaces:
+        # Prefer wlan/wifi interfaces, then ethernet, then others
+        preferred_interfaces = ['wlp0s20f3', 'wlan0', 'wifi0', 'eth0', 'enp0s31f6']
+        for preferred in preferred_interfaces:
+            if preferred in available_interfaces:
+                capture_interface = preferred
+                break
+        # If no preferred interface found, use the first non-loopback interface
+        if not capture_interface:
+            for iface in available_interfaces:
+                if iface not in ['lo', 'any', 'bluetooth-monitor', 'nflog', 'nfqueue', 'dbus-system', 'dbus-session']:
+                    capture_interface = iface
+                    break
+    
+    # Last resort: use 'any' to capture on all interfaces
+    if not capture_interface:
+        capture_interface = 'any'
+        logging.warning("No specific interface found, using 'any' for capture")
+    
+    logging.info(f"Starting packet capture on interface: {capture_interface}")
+    
+    # Test interface accessibility
+    try:
+        result = subprocess.run(['ip', 'link', 'show', capture_interface], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            logging.info(f"Interface {capture_interface} is available")
+        else:
+            logging.warning(f"Interface {capture_interface} may not be accessible")
+    except Exception as e:
+        logging.debug(f"Could not verify interface: {e}")
+    
+    sniffthread = threading.Thread(target=scp.sniff, kwargs={
+        "prn": pkt_process, 
+        "filter": "", 
+        "iface": capture_interface,
+        "store": False,  # Don't store packets in scapy's internal list
+        "count": 0  # Capture indefinitely (0 = no limit)
+    }, daemon=True)
+    sniffthread.start()
+    logging.info("Packet capture thread started successfully")
+except PermissionError as e:
+    logging.error("Permission denied for packet capture - raw socket access required")
+    logging.info("Solution 1: Run with sudo: sudo python3 main.py")
+    logging.info("Solution 2: Set capabilities: sudo setcap cap_net_raw,cap_net_admin=eip $(which python3)")
+    logging.info("Solution 3: Use the launcher: ./start_scapa.sh")
+except Exception as e:
+    logging.error(f"Failed to start packet capture: {e}")
+    logging.info("Try running with elevated privileges or check network interface access")
 
 def show_tcp_stream_openwin(tcpstreamtext):     #this function shows it's information in a separate window
     layout = [[sg.Multiline(tcpstreamtext, size=(100,50), key="tcpnewwintext")]]
@@ -619,48 +1066,158 @@ def show_http2_stream_openwin(tcpstreamtext):     #this function shows http2 inf
     window.close()
 
 def load_tcp_streams(window):     #the fuction reads the latest packet capture after saving it in the temp folder
+    """Enhanced TCP stream loading with comprehensive error handling"""
     global http2streams, http2_stream_id
     global logdecodedtls
-    try:
-        os.remove(os.path.join(TEMP_DIR, "tcpstreamread.pcap"))
-    except:
-        pass
-    scp.wrpcap(os.path.join(TEMP_DIR, "tcpstreamread.pcap"), pkt_list)
     global tcpstreams
-    tcpstreams = []
-    tcpstreamfilename = os.path.join(TEMP_DIR, "tcpstreamread.pcap")
-    cap1 = pyshark.FileCapture(
-        tcpstreamfilename,
-        display_filter="tcp.seq==1 && tcp.ack==1 && tcp.len==0",
-        keep_packets=True)
-    number_of_streams = 0
-    for pkt in cap1:
-        if pkt.highest_layer.lower() == "tcp" or pkt.highest_layer.lower() == "tls":
-            #print(pkt.tcp.stream)
-            if int(pkt.tcp.stream) > number_of_streams:
-                number_of_streams = int(pkt.tcp.stream) + 1
-    for i in range(0, number_of_streams):
-        tcpstreams.append(i)
-    window["-tcpstreams-"].update(values=[])
-    window["-tcpstreams-"].update(values=tcpstreams)
+    
+    try:
+        # Enhanced error handling for TCP stream analysis
+        from error_handling import handle_error
+        
+        # PyShark configuration is handled via tshark-compatible file copying
+        logging.debug("Using tshark-compatible pcap files for PyShark analysis")
+        
+        # Initialize streams
+        tcpstreams = []
+        
+        # Clean up old file
+        try:
+            os.remove(os.path.join(TEMP_DIR, "tcpstreamread.pcap"))
+        except:
+            pass
+        
+        # Write packet list to file with proper permissions
+        tcpstreamfilename = os.path.join(TEMP_DIR, "tcpstreamread.pcap")
+        
+        if not create_pcap_file_safely(tcpstreamfilename, pkt_list):
+            logging.error("Failed to create TCP stream pcap file")
+            window["-tcpstreams-"].update(values=[])
+            return
+        
+        try:
+            # Use absolute path to avoid path resolution issues
+            abs_tcpstreamfilename = os.path.abspath(tcpstreamfilename)
+            
+            # Create tshark-compatible copy to work around permission issues
+            from error_handling import create_tshark_compatible_pcap, cleanup_temp_pcap
+            tshark_pcap_path = create_tshark_compatible_pcap(abs_tcpstreamfilename)
+            
+            cap1 = pyshark.FileCapture(
+                tshark_pcap_path,
+                display_filter="tcp.seq==1 && tcp.ack==1 && tcp.len==0",
+                keep_packets=True,
+                tshark_path="/usr/bin/tshark")  # Direct path fallback
+            
+            number_of_streams = 0
+            packet_count = 0
+            
+            for pkt in cap1:
+                packet_count += 1
+                if packet_count > 10000:  # Prevent infinite loops
+                    logging.warning("Too many packets, limiting stream analysis")
+                    break
+                    
+                if pkt.highest_layer.lower() == "tcp" or pkt.highest_layer.lower() == "tls":
+                    try:
+                        stream_num = int(pkt.tcp.stream)
+                        if stream_num > number_of_streams:
+                            number_of_streams = stream_num + 1
+                    except (AttributeError, ValueError) as e:
+                        logging.debug(f"Stream parsing error: {e}")
+                        continue
+            
+            # Generate stream list
+            for i in range(0, number_of_streams):
+                tcpstreams.append(i)
+                
+            # Ensure file handle is closed
+            try:
+                cap1.close()
+            except:
+                pass
+            
+            # Cleanup temporary file
+            cleanup_temp_pcap(tshark_pcap_path)
+            
+            logging.info(f"Loaded {len(tcpstreams)} TCP streams from {packet_count} packets")
+            
+        except Exception as pyshark_error:
+            logging.error(f"PyShark TCP stream analysis failed: {pyshark_error}")
+            handle_error(pyshark_error, "TCP stream analysis")
+            # Fallback: provide empty streams
+            tcpstreams = []
+        
+        # Update GUI safely
+        try:
+            window["-tcpstreams-"].update(values=[])
+            window["-tcpstreams-"].update(values=tcpstreams)
+        except Exception as gui_error:
+            logging.error(f"GUI update failed: {gui_error}")
+        
+    except Exception as e:
+        logging.error(f"Critical error in load_tcp_streams: {e}")
+        try:
+            from error_handling import handle_error
+            handle_error(e, "load_tcp_streams")
+        except:
+            pass
+        # Ensure GUI is updated even on error
+        try:
+            if 'window' in locals() and window:
+                window["-tcpstreams-"].update(values=[])
+        except:
+            pass
 
+    # HTTP2 stream analysis
     if logdecodedtls == True:
-        http2streams = []
-        cap2 = pyshark.FileCapture(tcpstreamfilename, display_filter="http2.streamid",keep_packets=True)
-        for pkt in cap2:
-            field_names = pkt.http2._all_fields
-            for field_name in field_names:
-                http2_stream_id = {val for key, val in field_names.items() if key == 'http2.streamid'}
-                http2_stream_id = "".join(http2_stream_id)
-            if http2_stream_id not in http2streams:
-                http2streams.append(http2_stream_id)
-        window['-http2streams-'].update(values=http2streams)
-        pass
+        try:
+            http2streams = []
+            
+            # Verify file exists and is readable before HTTP2 analysis
+            if not os.path.exists(tcpstreamfilename) or not os.access(tcpstreamfilename, os.R_OK):
+                logging.warning("TCP stream file not accessible for HTTP2 analysis")
+                window['-http2streams-'].update(values=[])
+                return
+            
+            # Use absolute path for HTTP2 analysis too
+            abs_tcpstreamfilename = os.path.abspath(tcpstreamfilename)
+            
+            # Create tshark-compatible copy for HTTP2 analysis
+            from error_handling import create_tshark_compatible_pcap, cleanup_temp_pcap
+            tshark_pcap_path = create_tshark_compatible_pcap(abs_tcpstreamfilename)
+            
+            cap2 = pyshark.FileCapture(tshark_pcap_path, 
+                                     display_filter="http2.streamid",
+                                     keep_packets=True,
+                                     tshark_path="/usr/bin/tshark")  # Direct path fallback
+            for pkt in cap2:
+                field_names = pkt.http2._all_fields
+                for field_name in field_names:
+                    http2_stream_id = {val for key, val in field_names.items() if key == 'http2.streamid'}
+                    http2_stream_id = "".join(http2_stream_id)
+                if http2_stream_id not in http2streams:
+                    http2streams.append(http2_stream_id)
+            window['-http2streams-'].update(values=http2streams)
+            cap2.close()
+            
+            # Cleanup temporary file for HTTP2
+            cleanup_temp_pcap(tshark_pcap_path)
+        except Exception as http2_error:
+            logging.error(f"HTTP2 stream analysis failed: {http2_error}")
+            http2streams = []
+            window['-http2streams-'].update(values=http2streams)
 
 def show_http2_stream(window, streamno):         #Show the selected hhp2 stream in a new window
     global SSLLOGFILEPATH
     tcpstreamfilename = os.path.join(TEMP_DIR, "tcpstreamread.pcap")
-    cap3 = pyshark.FileCapture(tcpstreamfilename, display_filter = f'http2.streamid eq {str(http2streamindex)}', override_prefs={'ssl.keylog_file': SSLLOGFILEPATH})
+    abs_tcpstreamfilename = os.path.abspath(tcpstreamfilename)
+    
+    # Create tshark-compatible copy for HTTP2 stream display
+    from error_handling import create_tshark_compatible_pcap, cleanup_temp_pcap
+    tshark_pcap_path = create_tshark_compatible_pcap(abs_tcpstreamfilename)
+    
+    cap3 = pyshark.FileCapture(tshark_pcap_path, display_filter = f'http2.streamid eq {str(http2streamindex)}', override_prefs={'ssl.keylog_file': SSLLOGFILEPATH})
     dat = ""
     decode_hex = codecs.getdecoder("hex_codec")
     http_payload = bytes()
@@ -697,14 +1254,23 @@ def show_http2_stream(window, streamno):         #Show the selected hhp2 stream 
     formatteddat = dat
     print(formatteddat)
     show_http2_stream_openwin(formatteddat)
+    
+    # Cleanup temporary file for HTTP2 stream display
+    cleanup_temp_pcap(tshark_pcap_path)
     pass
 
 def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if it's decodable by cross checking with ssl log file
     global SSLLOGFILEPATH
     tcpstreamfilename = os.path.join(TEMP_DIR, "tcpstreamread.pcap")
+    abs_tcpstreamfilename = os.path.abspath(tcpstreamfilename)
     streamnumber = streamno
+    
+    # Create tshark-compatible copy for TCP stream display
+    from error_handling import create_tshark_compatible_pcap, cleanup_temp_pcap
+    tshark_pcap_path = create_tshark_compatible_pcap(abs_tcpstreamfilename)
+    
     cap = pyshark.FileCapture(
-        tcpstreamfilename,
+        tshark_pcap_path,
         display_filter = 'tcp.stream eq %d' % streamnumber,
         override_prefs={'ssl.keylog_file': SSLLOGFILEPATH}
     )
@@ -726,16 +1292,99 @@ def show_tcpstream(window, streamno):  #pyshark filter tcp steams and check if i
         sg.PopupAutoClose("No data")
     else:
         show_tcp_stream_openwin(formatteddat)
+    
+    # Cleanup temporary file for TCP stream display
+    cleanup_temp_pcap(tshark_pcap_path)
+
+def show_performance_window():
+    """Show detailed performance statistics window"""
+    if not performance_monitor:
+        sg.popup("Performance monitoring not available")
+        return
+    
+    stats = performance_monitor.get_current_stats()
+    suggestions = performance_monitor.get_optimization_suggestions()
+    
+    if not stats:
+        sg.popup("No performance data available yet")
+        return
+    
+    # Create performance display layout
+    perf_layout = [
+        [sg.Text("SCAPA Performance Monitor", font=('Arial Bold', 16))],
+        [sg.HorizontalSeparator()],
+        [sg.Text("System Performance:", font=('Arial Bold', 12))],
+        [sg.Text(f"Uptime: {stats['uptime']}")],
+        [sg.Text(f"CPU Usage: {stats['cpu_current']:.1f}% (avg: {stats['cpu_average']:.1f}%, peak: {stats['cpu_peak']:.1f}%)")],
+        [sg.Text(f"Memory Usage: {stats['memory_current']:.1f} MB (avg: {stats['memory_average']:.1f} MB, peak: {stats['memory_peak']:.1f} MB)")],
+        [sg.Text(f"Packets Processed: {stats['total_packets']}")],
+        [sg.Text(f"Processing Rate: {stats['packet_rate']:.1f} packets/sec")],
+        [sg.HorizontalSeparator()],
+        [sg.Text("Optimization Suggestions:", font=('Arial Bold', 12))],
+    ]
+    
+    if suggestions:
+        for i, suggestion in enumerate(suggestions, 1):
+            perf_layout.append([sg.Text(f"{i}. {suggestion}")])
+    else:
+        perf_layout.append([sg.Text("No optimization suggestions - performance is good!")])
+    
+    perf_layout.extend([
+        [sg.HorizontalSeparator()],
+        [sg.Button("Export Report", key='-export-'), sg.Button("Close")]
+    ])
+    
+    perf_window = sg.Window("SCAPA Performance Monitor", perf_layout, modal=True, size=(600, 400), resizable=True)
+    
+    while True:
+        event, values = perf_window.read()
+        if event in (None, 'Close'):
+            break
+        elif event == '-export-':
+            try:
+                filename = performance_monitor.export_stats()
+                sg.popup(f"Performance report exported to:\n{filename}")
+            except Exception as e:
+                sg.popup_error(f"Failed to export report: {e}")
+    
+    perf_window.close()
 
 while True:
 
     #print(suspiciouspackets)
 
-    event, values = window.read()
+    event, values = window.read(timeout=100)  # Add timeout for performance updates
+    
+    # Update performance display
+    if ENHANCEMENTS_AVAILABLE and performance_monitor:
+        try:
+            stats = performance_monitor.get_current_stats()
+            if stats:
+                window['-cpu-'].update(f"CPU: {stats['cpu_current']:.1f}%")
+                window['-memory-'].update(f"Memory: {stats['memory_current']:.0f}MB")
+                window['-packets-'].update(f"Packets: {stats['total_packets']}")
+        except Exception:
+            pass  # Ignore performance update errors
+    
+    # Update capture status
+    if updatepktlist:
+        if len(pktsummarylist) > 0:
+            window['-status-'].update(f"CAPTURING ({len(pktsummarylist)} pkts)", text_color='green')
+        else:
+            window['-status-'].update("CAPTURING", text_color='green')
+    elif len(pktsummarylist) > 0:
+        window['-status-'].update(f"STOPPED ({len(pktsummarylist)} pkts)", text_color='orange')
+    else:
+        window['-status-'].update("READY", text_color='orange')
+    
     if event == '-refreshrules-':
         process_rules(readrules())
+    if event == '-performance-' and ENHANCEMENTS_AVAILABLE and performance_monitor:
+        show_performance_window()
     if event == "-startcap-":
         updatepktlist = True
+        logging.info("Packet capture started by user")
+        window['-status-'].update("CAPTURING", text_color='green')
         #clear out all lists when new packet capture is started
         MLresult = []
         incomingpacketlist = []
@@ -749,6 +1398,8 @@ while True:
             if event == "-stopcap-":  # User clicked Stop
                 updatepktlist = False  # Stop capturing packets
                 Alert_Lock = True
+                logging.info("Packet capture stopped by user")
+                window['-status-'].update("STOPPED", text_color='red')
                 # Ensure packet data is retained and listboxes remain functional
                 window["-pkts-"].update(values=suspiciouspackets)  # Retain suspicious packets list
                 window["-ML-"].update(values=MLresult)  # Retain ML results list
@@ -798,8 +1449,7 @@ while True:
                     sg.Popup("No corresponding packet found for the selected ML result!", auto_close=True)
 
             if event == '-pktsall-' and len(values['-pktsall-']):     # if a list item is chosen
-                #pktselected = values['-pktsall-']
-                pkt_selected_index = window["-pktsall-"].get_indexes()
+                pkt_selected_index = window["-pktsall-"].get_indexes()[0]
                 try:
                     window["-tcpstreams-"].update(scroll_to_index=int(pkt_list[pkt_selected_index].tcp.stream))
                 except:
@@ -808,11 +1458,11 @@ while True:
             if event == "-showtcpstreamsbtn-":      # load tcp streams btn
                 load_tcp_streams(window)
             if event == "-tcpstreams-":
-                streamindex = window["-tcpstreams-"].get_indexes()
+                streamindex = window["-tcpstreams-"].get_indexes()[0]
                 show_tcpstream(window, streamindex)
             if event == "-http2streams-":
                 http2streamindex = values[event][0]
-                show_http2_stream(window, int(http2streamindex))
+                show_http2_stream(window, str(int(http2streamindex)))
             if event == "-showhttpstreamsbtn-":         # load http streams btn
                 httpobjectindexes = []
                 httpobjectactuals = []
@@ -824,81 +1474,28 @@ while True:
                 show_http2_stream_openwin(httpobjecttypes[httpobjectindex] + b"\n" + httpobjectactuals[httpobjectindex][:900])
 
 
-    if event == "-showhttpstreamsbtn-":
-        httpobjectindexes = []
-        httpobjectactuals = []
-        httpobjecttypes = []
-        httpobjectindexes, httpobjectactuals, httpobjecttypes = read_http()
-        window["-httpobjects-"].update(values=httpobjectindexes)
-    if event == "-pkts-" and len(values["-pkts-"]):  # User clicked on an alerted packet
-        selected_index = window["-pkts-"].get_indexes()[0]  # Get the index of the selected packet
-        try:
-            # Fetch the corresponding packet
-            packet = suspacketactual[selected_index]  # Get the actual suspicious packet
-
-            # Decode packet details using Scapy's show() and raw payload
-            packet_headers = packet.show(dump=True)  # Get detailed packet headers
-            packet_payload = ""
-            if packet.haslayer("Raw"):  # Check for payload
-                packet_payload = packet["Raw"].load.decode("utf-8", errors="replace")
-
-            # Update the decoding section of the GUI dynamically
-            window["-payloaddecoded-"].update(value=f"{packet_headers}\n\nPayload:\n{packet_payload}")
-
-        except IndexError:
-            sg.Popup("No corresponding packet found for the selected alert!", auto_close=True)
-
-    if event == "-ML-" and len(values["-ML-"]):  # User clicked on an ML result
-        selected_index = window["-ML-"].get_indexes()[0]  # Get the index of the selected ML result
-        try:
-            # Fetch the corresponding packet
-            packet = pkt_list[selected_index]  # Get the ML-related packet
-
-            # Decode packet details using Scapy's show() and raw payload
-            packet_headers = packet.show(dump=True)  # Get detailed packet headers
-
-
-            # Update the decoding section of the GUI dynamically
-            window["-payloaddecoded-"].update(value=f"{packet_headers}\n")
-
-        except IndexError:
-            sg.Popup("No corresponding packet found for the selected ML result!", auto_close=True)
-    if event == "-httpobjects-":
-        httpobjectindex = values[event][0]
-        show_http2_stream_openwin(httpobjecttypes[httpobjectindex] + b"\n" + httpobjectactuals[httpobjectindex][:900])
-
-    if event == "-http2streams-":
-        http2streamindex = values[event][0]
-        print(http2streamindex)
-        show_http2_stream(window, str(int(http2streamindex)))
-    if event == '-pktsall-' and len(values['-pktsall-']):     # if a list item is chosen
-        pkt_selected_index = window["-pktsall-"].get_indexes()[0]
-        try:
-            window["-tcpstreams-"].update(scroll_to_index=int(pkt_list[pkt_selected_index].tcp.stream))
-        except:
-            pass
-
     if event == '-savepcap-':
         pcapname = "savedalert"
-        scp.wrpcap(os.path.join(SAVED_DIR, f'{pcapname}.pcap'), pkt_list)       #pkt_list works
-
-    if event == '-pkts-' and len(values['-pkts-']):     # if a list item is chosen
-        sus_selected = values['-pkts-']
-        sus_selected_index = window['-pkts-'].get_indexes()[0]
-        try:
-            window["-tcpstreams-"].update(scroll_to_index=int(suspacketactual[sus_selected_index].tcp.stream))
-        except:
-            pass
-        window['-payloaddecoded-'].update(value=sus_readablepayloads[sus_selected_index])
-
-    if event == "-showtcpstreamsbtn-":
-        load_tcp_streams(window)
-
-    if event == "-tcpstreams-":
-        streamindex = window["-tcpstreams-"].get_indexes()
-        show_tcpstream(window, streamindex)
+        create_pcap_file_safely(os.path.join(SAVED_DIR, f'{pcapname}.pcap'), pkt_list)
 
     if event in (None, 'Exit'):
         break
+
+# Enhanced cleanup
+if ENHANCEMENTS_AVAILABLE:
+    # Stop performance monitoring
+    if performance_monitor:
+        performance_monitor.stop_monitoring()
+        logging.info("Performance monitoring stopped")
+    
+    # Export final performance report
+    if performance_monitor:
+        try:
+            report_file = performance_monitor.export_stats()
+            logging.info(f"Final performance report saved to {report_file}")
+        except Exception as e:
+            logging.error(f"Failed to export performance report: {e}")
+    
+    logging.info("SCAPA shutdown complete")
 
 window.close()
