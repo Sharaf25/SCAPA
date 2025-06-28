@@ -1,6 +1,6 @@
 import scapy.all as scp
 import codecs
-import PySimpleGUI as sg
+import FreeSimpleGUI as sg
 import os
 import threading
 import sys
@@ -21,7 +21,6 @@ import pickle
 import numpy
 import winsound
 from plyer import notification
-from tkinter import Tk, messagebox
 from sklearn.ensemble import RandomForestClassifier
 
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
@@ -29,18 +28,17 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 #rules ---->        instruction  protocol  sourceIP  sourcePort  direction  destinationIP  destinationPort  message
 
 def alert_user(message):
-    #Send desktop notification with sound.
+    """Send desktop notification with sound"""
     # Play alert sound
     winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
-
-    root = Tk()
-    root.withdraw()  # Hide the main tkinter window
-
-    # Display the message box
-    messagebox.showinfo("Intrusion Detection Alert", message)
-
-    # Destroy the root window after the message box is closed
-    root.destroy()
+    sg.popup_non_blocking("Intrusion Detection Alert",
+                          message,
+                          auto_close=True,
+                          auto_close_duration=5,  # Auto-close after 5 seconds
+                          no_titlebar=False,
+                          grab_anywhere=True,
+                          keep_on_top=True,
+                          icon=None)
 
 def readrules():
     rulefile = "rules.txt"
